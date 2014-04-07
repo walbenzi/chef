@@ -30,14 +30,14 @@ describe Chef::Knife::RoleRunListRemove do
       :print_after => nil
     }
     @knife.name_args = [ "will", "role[monkey]" ]
-    @knife.stub!(:output).and_return(true)
+    @knife.stub(:output).and_return(true)
 
     @role = Chef::Role.new()
     @role.name("will")
-    @role.stub!(:save).and_return(true)
+    @role.stub(:save).and_return(true)
 
-    @knife.ui.stub!(:confirm).and_return(true)
-    Chef::Role.stub!(:load).and_return(@role)
+    @knife.ui.stub(:confirm).and_return(true)
+    Chef::Role.stub(:load).and_return(@role)
 
   end
 

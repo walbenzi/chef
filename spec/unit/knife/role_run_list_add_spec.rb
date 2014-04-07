@@ -28,10 +28,10 @@ describe Chef::Knife::RoleRunListAdd do
       :after => nil
     }
     @knife.name_args = [ "will", "role[monkey]" ]
-    @knife.stub!(:output).and_return(true)
+    @knife.stub(:output).and_return(true)
     @role = Chef::Role.new() 
-    @role.stub!(:save).and_return(true)
-    Chef::Role.stub!(:load).and_return(@role)
+    @role.stub(:save).and_return(true)
+    Chef::Role.stub(:load).and_return(@role)
   end
 
   describe "run" do
