@@ -16,24 +16,31 @@
 # limitations under the License.
 #
 
-require 'chef/provider/service'
 require 'chef/provider/service/init'
-require 'chef/mixin/shell_out'
 
 class Chef
   class Provider
     class Service
       class Redhat < Chef::Provider::Service::Init
-        include Chef::Mixin::ShellOut
 
         CHKCONFIG_ON = /\d:on/
         CHKCONFIG_MISSING = /No such/
 
+        provides :service, platform_family: [ "rhel", "fedora", "suse" ]
+
+        def self.provides?(node, resource)
+          super && Chef::Platform::ServiceHelpers.service_resource_providers.include?(:redhat)
+        end
+
+        def self.supports?(resource, action)
+          Chef::Platform::ServiceHelpers.config_for_service(resource.service_name).include?(:initd)
+        end
+
         def initialize(new_resource, run_context)
           super
-           @init_command = "/sbin/service #{@new_resource.service_name}"
-           @new_resource.supports[:status] = true
-           @service_missing = false
+          @init_command = "/sbin/service #{@new_resource.service_name}"
+          @new_resource.supports[:status] = true
+          @service_missing = false
         end
 
         def define_resource_requirements

@@ -25,34 +25,58 @@ describe Chef::Provider::RemoteFile::LocalFile do
   let(:new_resource) { Chef::Resource::RemoteFile.new("local file backend test (new_resource)") }
   let(:current_resource) { Chef::Resource::RemoteFile.new("local file backend test (current_resource)") }
   subject(:fetcher) { Chef::Provider::RemoteFile::LocalFile.new(uri, new_resource, current_resource) }
+  
+  context "when parsing source path" do
+    describe "when given local unix path" do
+      let(:uri) { URI.parse("file:///nyan_cat.png") }
+      it "returns a correct unix path" do
+        expect(fetcher.fix_windows_path(uri.path)).to eq("/nyan_cat.png")
+      end
+    end
+
+    describe "when given local windows path" do
+      let(:uri) { URI.parse("file:///z:/windows/path/file.txt") }
+      it "returns a valid windows local path" do
+        expect(fetcher.fix_windows_path(uri.path)).to eq("z:/windows/path/file.txt")
+      end
+    end
+
+    describe "when given unc windows path" do
+      let(:uri) { URI.parse("file:////server/share/windows/path/file.txt") }
+      it "returns a valid windows unc path" do
+        expect(fetcher.fix_windows_path(uri.path)).to eq("//server/share/windows/path/file.txt")
+      end
+    end
+  end
 
   context "when first created" do
 
     it "stores the uri it is passed" do
-      fetcher.uri.should == uri
+      expect(fetcher.uri).to eq(uri)
     end
 
     it "stores the new_resource" do
-      fetcher.new_resource.should == new_resource
+      expect(fetcher.new_resource).to eq(new_resource)
     end
 
   end
 
   describe "when fetching the object" do
 
-    let(:tempfile) { mock("Tempfile", :path => "/tmp/foo/bar/nyan.png") }
-    let(:chef_tempfile) { mock("Chef::FileContentManagement::Tempfile", :tempfile => tempfile) }
+    let(:tempfile) { double("Tempfile", :path => "/tmp/foo/bar/nyan.png", :close => nil) }
+    let(:chef_tempfile) { double("Chef::FileContentManagement::Tempfile", :tempfile => tempfile) }
 
     before do
       current_resource.source("file:///nyan_cat.png")
     end
 
     it "stages the local file to a temporary file" do
-      Chef::FileContentManagement::Tempfile.should_receive(:new).with(new_resource).and_return(chef_tempfile)
-      ::FileUtils.should_receive(:cp).with(uri.path, tempfile.path)
+      expect(Chef::FileContentManagement::Tempfile).to receive(:new).with(new_resource).and_return(chef_tempfile)
+      expect(::FileUtils).to receive(:cp).with(uri.path, tempfile.path)
+      expect(tempfile).to receive(:close)            
 
       result = fetcher.fetch
-      result.should == tempfile
+      expect(result).to eq(tempfile)
     end
 
   end

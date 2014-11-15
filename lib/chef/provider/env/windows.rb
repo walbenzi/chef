@@ -16,15 +16,13 @@
 # limitations under the License.
 #
 
-if RUBY_PLATFORM =~ /mswin|mingw32|windows/
-  require 'ruby-wmi'
-  require 'Win32API'
-end
+require 'chef/mixin/windows_env_helper'
 
 class Chef
   class Provider
     class Env
       class Windows < Chef::Provider::Env
+        include Chef::Mixin::WindowsEnvHelper
 
         def create_env
           obj = env_obj(@new_resource.key_name)
@@ -35,6 +33,9 @@ class Chef
           end
           obj.variablevalue = @new_resource.value
           obj.put_
+          value = @new_resource.value
+          value = expand_path(value) if @new_resource.key_name.upcase == 'PATH'
+          ENV[@new_resource.key_name] = value
           broadcast_env_change
         end
 
@@ -44,31 +45,25 @@ class Chef
             obj.delete_
             broadcast_env_change
           end
+          if ENV[@new_resource.key_name]
+            ENV.delete(@new_resource.key_name)
+          end
         end
 
         def env_value(key_name)
           obj = env_obj(key_name)
-          return obj ? obj.variablevalue : nil
+          return obj ? obj.variablevalue : ENV[key_name]
         end
 
         def env_obj(key_name)
-          WMI::Win32_Environment.find(:first,
-                                      :conditions => { :name => key_name })
+          wmi = WmiLite::Wmi.new
+          # Note that by design this query is case insensitive with regard to key_name
+          environment_variables = wmi.query("select * from Win32_Environment where name = '#{key_name}'")
+          if environment_variables && environment_variables.length > 0
+            environment_variables[0].wmi_ole_object
+          end
         end
 
-        #see: http://msdn.microsoft.com/en-us/library/ms682653%28VS.85%29.aspx
-        HWND_BROADCAST = 0xffff
-        WM_SETTINGCHANGE = 0x001A
-        SMTO_BLOCK = 0x0001
-        SMTO_ABORTIFHUNG = 0x0002
-        SMTO_NOTIMEOUTIFNOTHUNG = 0x0008
-
-        def broadcast_env_change
-          result = 0
-          flags = SMTO_BLOCK | SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG
-          @send_message ||= Win32API.new('user32', 'SendMessageTimeout', 'LLLPLLP', 'L')
-          @send_message.call(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 'Environment', flags, 5000, result)
-        end
       end
     end
   end

@@ -57,6 +57,12 @@ class Chef
         :boolean => true,
         :description => "Update cookbook versions even if they have been frozen"
 
+      option :concurrency,
+        :long => '--concurrency NUMBER_OF_THREADS',
+        :description => "How many concurrent threads will be used",
+        :default => 10,
+        :proc => lambda { |o| o.to_i }
+
       option :environment,
         :short => '-E',
         :long  => '--environment ENVIRONMENT',
@@ -87,6 +93,7 @@ class Chef
         end
 
         assert_environment_valid!
+        warn_about_cookbook_shadowing
         version_constraints_to_update = {}
         upload_failures = 0
         upload_ok = 0
@@ -133,6 +140,7 @@ class Chef
             end
           end
 
+
           upload_failures += @name_args.length - @cookbooks_to_upload.length
 
           if upload_failures == 0
@@ -176,7 +184,7 @@ class Chef
 
       def cookbook_repo
         @cookbook_loader ||= begin
-          Chef::Cookbook::FileVendor.on_create { |manifest| Chef::Cookbook::FileSystemFileVendor.new(manifest, config[:cookbook_path]) }
+          Chef::Cookbook::FileVendor.fetch_from_disk(config[:cookbook_path])
           Chef::CookbookLoader.new(config[:cookbook_path])
         end
       end
@@ -193,6 +201,10 @@ class Chef
       end
 
       def warn_about_cookbook_shadowing
+        # because cookbooks are lazy-loaded, we have to force the loader
+        # to load the cookbooks the user intends to upload here:
+        cookbooks_to_upload
+        
         unless cookbook_repo.merged_cookbooks.empty?
           ui.warn "* " * 40
           ui.warn(<<-WARNING)
@@ -228,7 +240,7 @@ WARNING
           check_for_broken_links!(cb)
           check_for_dependencies!(cb)
         end
-        Chef::CookbookUploader.new(cookbooks, config[:cookbook_path], :force => config[:force]).upload_cookbooks
+        Chef::CookbookUploader.new(cookbooks, :force => config[:force], :concurrency => config[:concurrency]).upload_cookbooks
       rescue Chef::Exceptions::CookbookFrozen => e
         ui.error e
         raise
@@ -251,14 +263,18 @@ WARNING
       end
 
       def check_for_dependencies!(cookbook)
-        # for each dependency, check if the version is on the server, or
+        # for all dependencies, check if the version is on the server, or
         # the version is in the cookbooks being uploaded. If not, exit and warn the user.
-        cookbook.metadata.dependencies.each do |cookbook_name, version|
-          unless check_server_side_cookbooks(cookbook_name, version) || check_uploading_cookbooks(cookbook_name, version)
-            ui.error "Cookbook #{cookbook.name} depends on cookbook '#{cookbook_name}' version '#{version}',"
-            ui.error "which is not currently being uploaded and cannot be found on the server."
-            exit 1
-          end
+        missing_dependencies = cookbook.metadata.dependencies.reject do |cookbook_name, version|
+          check_server_side_cookbooks(cookbook_name, version) || check_uploading_cookbooks(cookbook_name, version)
+        end
+
+        unless missing_dependencies.empty?
+          missing_cookbook_names = missing_dependencies.map { |cookbook_name, version|  "'#{cookbook_name}' version '#{version}'"}
+          ui.error "Cookbook #{cookbook.name} depends on cookbooks which are not currently"
+          ui.error "being uploaded and cannot be found on the server."
+          ui.error "The missing cookbook(s) are: #{missing_cookbook_names.join(', ')}"
+          exit 1
         end
       end
 

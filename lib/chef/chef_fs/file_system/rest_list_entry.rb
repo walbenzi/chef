@@ -19,9 +19,9 @@
 require 'chef/chef_fs/file_system/base_fs_object'
 require 'chef/chef_fs/file_system/not_found_error'
 require 'chef/chef_fs/file_system/operation_failed_error'
-require 'chef/chef_fs/raw_request'
 require 'chef/role'
 require 'chef/node'
+require 'chef/json_compat'
 
 class Chef
   module ChefFS
@@ -68,7 +68,7 @@ class Chef
 
         def delete(recurse)
           begin
-            rest.delete_rest(api_path)
+            rest.delete(api_path)
           rescue Timeout::Error => e
             raise Chef::ChefFS::FileSystem::OperationFailedError.new(:delete, self, e), "Timeout deleting: #{e}"
           rescue Net::HTTPServerException => e
@@ -81,12 +81,13 @@ class Chef
         end
 
         def read
-          Chef::JSONCompat.to_json_pretty(_read_hash)
+          Chef::JSONCompat.to_json_pretty(minimize_value(_read_json))
         end
 
-        def _read_hash
+        def _read_json
           begin
-            json = Chef::ChefFS::RawRequest.raw_request(rest, api_path)
+            # Minimize the value (get rid of defaults) so the results don't look terrible
+            root.get_json(api_path)
           rescue Timeout::Error => e
             raise Chef::ChefFS::FileSystem::OperationFailedError.new(:read, self, e), "Timeout reading: #{e}"
           rescue Net::HTTPServerException => e
@@ -96,8 +97,6 @@ class Chef
               raise Chef::ChefFS::FileSystem::OperationFailedError.new(:read, self, e), "HTTP error reading: #{e}"
             end
           end
-          # Minimize the value (get rid of defaults) so the results don't look terrible
-          minimize_value(JSON.parse(json, :create_additions => false))
         end
 
         def chef_object
@@ -121,7 +120,7 @@ class Chef
 
           # Grab this value
           begin
-            value = _read_hash
+            value = _read_json
           rescue Chef::ChefFS::FileSystem::NotFoundError
             return [ false, :none, other_value_json ]
           end
@@ -130,8 +129,8 @@ class Chef
           value = minimize_value(value)
           value_json = Chef::JSONCompat.to_json_pretty(value)
           begin
-            other_value = JSON.parse(other_value_json, :create_additions => false)
-          rescue JSON::ParserError => e
+            other_value = Chef::JSONCompat.parse(other_value_json)
+          rescue Chef::Exceptions::JSON::ParseError => e
             Chef::Log.warn("Parse error reading #{other.path_for_printing} as JSON: #{e}")
             return [ nil, value_json, other_value_json ]
           end
@@ -147,8 +146,8 @@ class Chef
 
         def write(file_contents)
           begin
-            object = JSON.parse(file_contents, :create_additions => false)
-          rescue JSON::ParserError => e
+            object = Chef::JSONCompat.parse(file_contents)
+          rescue Chef::Exceptions::JSON::ParseError => e
             raise Chef::ChefFS::FileSystem::OperationFailedError.new(:write, self, e), "Parse error reading JSON: #{e}"
           end
 
@@ -160,7 +159,7 @@ class Chef
           end
 
           begin
-            rest.put_rest(api_path, object)
+            rest.put(api_path, object)
           rescue Timeout::Error => e
             raise Chef::ChefFS::FileSystem::OperationFailedError.new(:write, self, e), "Timeout writing: #{e}"
           rescue Net::HTTPServerException => e
@@ -171,7 +170,16 @@ class Chef
             end
           end
         end
+
+        def api_error_text(response)
+          begin
+            Chef::JSONCompat.parse(response.body)['error'].join("\n")
+          rescue
+            response.body
+          end
+        end
       end
+
     end
   end
 end

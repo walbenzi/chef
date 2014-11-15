@@ -30,6 +30,7 @@ class Chef
         require 'chef/exceptions'
         require 'chef/search/query'
         require 'chef/mixin/shell_out'
+        require 'chef/mixin/command'
         require 'mixlib/shellout'
       end
 
@@ -64,10 +65,14 @@ class Chef
         :long => "--ssh-user USERNAME",
         :description => "The ssh username"
 
-      option :ssh_password,
-        :short => "-P PASSWORD",
-        :long => "--ssh-password PASSWORD",
-        :description => "The ssh password"
+      option :ssh_password_ng,
+        :short => "-P [PASSWORD]",
+        :long => "--ssh-password [PASSWORD]",
+        :description => "The ssh password - will prompt if flag is specified but no password is given",
+        # default to a value that can not be a password (boolean)
+        # so we can effectively test if this parameter was specified
+        # without a vlaue
+        :default => false
 
       option :ssh_port,
         :short => "-p PORT",
@@ -101,16 +106,9 @@ class Chef
       def session
         config[:on_error] ||= :skip
         ssh_error_handler = Proc.new do |server|
-          if config[:manual]
-            node_name = server.host
-          else
-            @action_nodes.each do |n|
-              node_name = n if format_for_display(n)[config[:attribute]] == server.host
-            end
-          end
           case config[:on_error]
           when :skip
-            ui.warn "Failed to connect to #{node_name} -- #{$!.class.name}: #{$!.message}"
+            ui.warn "Failed to connect to #{server.host} -- #{$!.class.name}: #{$!.message}"
             $!.backtrace.each { |l| Chef::Log.debug(l) }
           when :raise
             #Net::SSH::Multi magic to force exception to be re-raised.
@@ -138,31 +136,9 @@ class Chef
       end
 
       def configure_session
-        list = case config[:manual]
-               when true
-                 @name_args[0].split(" ")
-               when false
-                 r = Array.new
-                 q = Chef::Search::Query.new
-                 @action_nodes = q.search(:node, @name_args[0])[0]
-                 @action_nodes.each do |item|
-                   # we should skip the loop to next iteration if the item returned by the search is nil
-                   next if item.nil?
-                   # if a command line attribute was not passed, and we have a cloud public_hostname, use that.
-                   # see #configure_attribute for the source of config[:attribute] and config[:override_attribute]
-                   if !config[:override_attribute] && item[:cloud] and item[:cloud][:public_hostname]
-                     i = item[:cloud][:public_hostname]
-                   elsif config[:override_attribute]
-                     i = extract_nested_value(item, config[:override_attribute])
-                   else
-                     i = extract_nested_value(item, config[:attribute])
-                   end
-                   # next if we couldn't find the specified attribute in the returned node object
-                   next if i.nil?
-                   r.push(i)
-                 end
-                 r
-               end
+        list = config[:manual] ?
+               @name_args[0].split(" ") :
+               search_nodes
         if list.length == 0
           if @action_nodes.length == 0
             ui.fatal("No nodes returned from search!")
@@ -176,21 +152,58 @@ class Chef
         session_from_list(list)
       end
 
+      def search_nodes
+        list = Array.new
+        query = Chef::Search::Query.new
+        @action_nodes = query.search(:node, @name_args[0])[0]
+        @action_nodes.each do |item|
+          # we should skip the loop to next iteration if the item
+          # returned by the search is nil
+          next if item.nil?
+          # if a command line attribute was not passed, and we have a
+          # cloud public_hostname, use that.  see #configure_attribute
+          # for the source of config[:attribute] and
+          # config[:attribute_from_cli]
+          if config[:attribute_from_cli]
+            Chef::Log.debug("Using node attribute '#{config[:attribute_from_cli]}' from the command line as the ssh target")
+            host = extract_nested_value(item, config[:attribute_from_cli])
+          elsif item[:cloud] && item[:cloud][:public_hostname]
+            Chef::Log.debug("Using node attribute 'cloud[:public_hostname]' automatically as the ssh target")
+            host = item[:cloud][:public_hostname]
+          else
+            # ssh attribute from a configuration file or the default will land here
+            Chef::Log.debug("Using node attribute '#{config[:attribute]}' as the ssh target")
+            host = extract_nested_value(item, config[:attribute])
+          end
+          # next if we couldn't find the specified attribute in the
+          # returned node object
+          next if host.nil?
+          ssh_port = item[:cloud].nil? ? nil : item[:cloud][:public_ssh_port]
+          srv = [host, ssh_port]
+          list.push(srv)
+        end
+        list
+      end
+
       def session_from_list(list)
         list.each do |item|
-          Chef::Log.debug("Adding #{item}")
+          host, ssh_port = item
+          Chef::Log.debug("Adding #{host}")
           session_opts = {}
 
-          ssh_config = Net::SSH.configuration_for(item)
+          ssh_config = Net::SSH.configuration_for(host)
 
           # Chef::Config[:knife][:ssh_user] is parsed in #configure_user and written to config[:ssh_user]
           user = config[:ssh_user] || ssh_config[:user]
-          hostspec = user ? "#{user}@#{item}" : item
+          hostspec = user ? "#{user}@#{host}" : host
           session_opts[:keys] = File.expand_path(config[:identity_file]) if config[:identity_file]
           session_opts[:keys_only] = true if config[:identity_file]
           session_opts[:password] = config[:ssh_password] if config[:ssh_password]
           session_opts[:forward_agent] = config[:forward_agent]
-          session_opts[:port] = config[:ssh_port] || Chef::Config[:knife][:ssh_port] || ssh_config[:port]
+          session_opts[:port] = config[:ssh_port] ||
+                                ssh_port || # Use cloud port if available
+                                Chef::Config[:knife][:ssh_port] ||
+                                ssh_config[:port]
           session_opts[:logger] = Chef::Log.logger if Chef::Log.level == :debug
 
           if !config[:host_key_verify]
@@ -200,7 +213,7 @@ class Chef
 
           session.use(hostspec, session_opts)
 
-          @longest = item.length if item.length > @longest
+          @longest = host.length if host.length > @longest
         end
 
         session
@@ -397,10 +410,8 @@ class Chef
         # Thus we can differentiate between a config file value and a command line override at this point by checking config[:attribute]
         # We can tell here if fqdn was passed from the command line, rather than being the default, by checking config[:attribute]
         # However, after here, we cannot tell these things, so we must preserve config[:attribute]
-        config[:override_attribute] = config[:attribute] || Chef::Config[:knife][:ssh_attribute]
-        config[:attribute] = (Chef::Config[:knife][:ssh_attribute] ||
-                              config[:attribute] ||
-                              "fqdn").strip
+        config[:attribute_from_cli] = config[:attribute]
+        config[:attribute] = (config[:attribute_from_cli] || Chef::Config[:knife][:ssh_attribute] || "fqdn").strip
       end
 
       def cssh
@@ -414,6 +425,11 @@ class Chef
           end
         end
         raise Chef::Exceptions::Exec, "no command found for cssh" unless cssh_cmd
+
+        # pass in the consolidated itentity file option to cssh(X)
+        if config[:identity_file]
+          cssh_cmd << " --ssh_args '-i #{File.expand_path(config[:identity_file])}'"
+        end
 
         session.servers_for.each do |server|
           cssh_cmd << " #{server.user ? "#{server.user}@#{server.host}" : server.host}"
@@ -432,6 +448,31 @@ class Chef
                              Chef::Config[:knife][:ssh_user])
       end
 
+      # This is a bit overly complicated because of the way we want knife ssh to work with -P causing a password prompt for
+      # the user, but we have to be conscious that this code gets included in knife bootstrap and knife * server create as
+      # well.  We want to change the semantics so that the default is false and 'nil' means -P without an argument on the
+      # command line.  But the other utilities expect nil to be the default and we can't prompt in that case. So we effectively
+      # use ssh_password_ng to determine if we're coming from knife ssh or from the other utilities.  The other utilties can
+      # also be patched to use ssh_password_ng easily as long they follow the convention that the default is false.
+      def configure_password
+        if config.has_key?(:ssh_password_ng) && config[:ssh_password_ng].nil?
+          # If the parameter is called on the command line with no value
+          # it will set :ssh_password_ng = nil
+          # This is where we want to trigger a prompt for password
+          config[:ssh_password] = get_password
+        else
+          # if ssh_password_ng is false then it has not been set at all, and we may be in knife ec2 and still
+          # using an old config[:ssh_password].  this is backwards compatibility.  all knife cloud plugins should
+          # be updated to use ssh_password_ng with a default of false and ssh_password should be retired, (but
+          # we'll still need to use the ssh_password out of knife.rb if we find that).
+          ssh_password = config.has_key?(:ssh_password_ng) ? config[:ssh_password_ng] : config[:ssh_password]
+          # Otherwise, the password has either been specified on the command line,
+          # in knife.rb, or key based auth will be attempted
+          config[:ssh_password] = get_stripped_unfrozen_value(ssh_password ||
+                             Chef::Config[:knife][:ssh_password])
+        end
+      end
+
       def configure_identity_file
         config[:identity_file] = get_stripped_unfrozen_value(config[:identity_file] ||
                              Chef::Config[:knife][:ssh_identity_file])
@@ -448,6 +489,7 @@ class Chef
 
         configure_attribute
         configure_user
+        configure_password
         configure_identity_file
         configure_gateway
         configure_session
@@ -479,6 +521,8 @@ class Chef
           exit_status
         end
       end
+
+      private :search_nodes
 
     end
   end

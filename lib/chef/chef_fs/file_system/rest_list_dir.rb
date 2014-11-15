@@ -45,7 +45,7 @@ class Chef
 
         def children
           begin
-            @children ||= Chef::ChefFS::RawRequest.raw_json(rest, api_path).keys.sort.map do |key|
+            @children ||= root.get_json(api_path).keys.sort.map do |key|
               _make_child_entry("#{key}.json", true)
             end
           rescue Timeout::Error => e
@@ -61,8 +61,8 @@ class Chef
 
         def create_child(name, file_contents)
           begin
-            object = JSON.parse(file_contents, :create_additions => false)
-          rescue JSON::ParserError => e
+            object = Chef::JSONCompat.parse(file_contents)
+          rescue Chef::Exceptions::JSON::ParseError => e
             raise Chef::ChefFS::FileSystem::OperationFailedError.new(:create_child, self, e), "Parse error reading JSON creating child '#{name}': #{e}"
           end
 
@@ -76,7 +76,7 @@ class Chef
           end
 
           begin
-            rest.post_rest(api_path, object)
+            rest.post(api_path, object)
           rescue Timeout::Error => e
             raise Chef::ChefFS::FileSystem::OperationFailedError.new(:create_child, self, e), "Timeout creating '#{name}': #{e}"
           rescue Net::HTTPServerException => e

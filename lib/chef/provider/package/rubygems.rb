@@ -352,14 +352,15 @@ class Chef
 
         end
 
-        include Chef::Mixin::ShellOut
-
         attr_reader :gem_env
         attr_reader :cleanup_gem_env
 
         def logger
           Chef::Log.logger
         end
+
+        provides :chef_gem
+        provides :gem_package
 
         include Chef::Mixin::GetSourceFromPackage
 
@@ -495,6 +496,7 @@ class Chef
         def target_version_already_installed?
           return false unless @current_resource && @current_resource.version
           return false if @current_resource.version.nil?
+          return false if @new_resource.version.nil?
 
           Gem::Requirement.new(@new_resource.version).satisfied_by?(Gem::Version.new(@current_resource.version))
         end
@@ -532,7 +534,7 @@ class Chef
           if @new_resource.source =~ /\.gem$/i
             name = @new_resource.source
           else
-            src = @new_resource.source && "  --source=#{@new_resource.source} --source=http://rubygems.org"
+            src = @new_resource.source && "  --source=#{@new_resource.source} --source=https://rubygems.org"
           end
           if version
             shell_out!("#{gem_binary_path} install #{name} -q --no-rdoc --no-ri -v \"#{version}\"#{src}#{opts}", :env=>nil)

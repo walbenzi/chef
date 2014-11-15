@@ -21,7 +21,8 @@ require "chef/mixin/from_file"
 require "chef/monkey_patches/fileutils"
 require "chef/provider/git"
 require "chef/provider/subversion"
-require 'chef/dsl/recipe'
+require "chef/dsl/recipe"
+require "chef/util/path_helper"
 
 class Chef
   class Provider
@@ -31,7 +32,7 @@ class Chef
       include Chef::Mixin::FromFile
       include Chef::Mixin::Command
 
-      attr_reader :scm_provider, :release_path, :previous_release_path
+      attr_reader :scm_provider, :release_path, :shared_path, :previous_release_path
 
       def initialize(new_resource, run_context)
         super(new_resource, run_context)
@@ -53,6 +54,7 @@ class Chef
       def load_current_resource
         @scm_provider.load_current_resource
         @release_path = @new_resource.deploy_to + "/releases/#{release_slug}"
+        @shared_path = @new_resource.shared_path
       end
 
       def sudo(command,&block)
@@ -174,7 +176,6 @@ class Chef
         restart
       end
 
-
       def callback(what, callback_code=nil)
         @collection = Chef::ResourceCollection.new
         case callback_code
@@ -243,7 +244,7 @@ class Chef
       end
 
       def all_releases
-        Dir.glob(@new_resource.deploy_to + "/releases/*").sort
+        Dir.glob(Chef::Util::PathHelper.escape_glob(@new_resource.deploy_to) + "/releases/*").sort
       end
 
       def update_cached_repo
@@ -266,7 +267,7 @@ class Chef
 
       def copy_cached_repo
         target_dir_path = @new_resource.deploy_to + "/releases"
-        converge_by("deploy from repo to #{@target_dir_path} ") do
+        converge_by("deploy from repo to #{target_dir_path} ") do
           FileUtils.rm_rf(release_path) if ::File.exist?(release_path)
           FileUtils.mkdir_p(target_dir_path)
           FileUtils.cp_r(::File.join(@new_resource.destination, "."), release_path, :preserve => true)
@@ -374,7 +375,7 @@ class Chef
 
       def gem_resource_collection_runner
         gems_collection = Chef::ResourceCollection.new
-        gem_packages.each { |rbgem| gems_collection << rbgem }
+        gem_packages.each { |rbgem| gems_collection.insert(rbgem) }
         gems_run_context = run_context.dup
         gems_run_context.resource_collection = gems_collection
         Chef::Runner.new(gems_run_context)

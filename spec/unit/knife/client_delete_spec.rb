@@ -21,20 +21,63 @@ require 'spec_helper'
 describe Chef::Knife::ClientDelete do
   before(:each) do
     @knife = Chef::Knife::ClientDelete.new
+    # defaults
+    @knife.config = {
+      :delete_validators => false
+    }
     @knife.name_args = [ 'adam' ]
   end
 
   describe 'run' do
     it 'should delete the client' do
-      @knife.should_receive(:delete_object).with(Chef::ApiClient, 'adam')
+      expect(@knife).to receive(:delete_object).with(Chef::ApiClient, 'adam', 'client')
       @knife.run
     end
 
     it 'should print usage and exit when a client name is not provided' do
       @knife.name_args = []
-      @knife.should_receive(:show_usage)
-      @knife.ui.should_receive(:fatal)
-      lambda { @knife.run }.should raise_error(SystemExit)
+      expect(@knife).to receive(:show_usage)
+      expect(@knife.ui).to receive(:fatal)
+      expect { @knife.run }.to raise_error(SystemExit)
+    end
+  end
+
+  describe 'with a validator' do
+    before(:each) do
+      allow(Chef::Knife::UI).to receive(:confirm).and_return(true)
+      allow(@knife).to receive(:confirm).and_return(true)
+      @client = Chef::ApiClient.new
+      expect(Chef::ApiClient).to receive(:load).and_return(@client)
+    end
+
+    it 'should delete non-validator client if --delete-validators is not set' do
+      @knife.config[:delete_validators] = false
+      expect(@client).to receive(:destroy).and_return(@client)
+      expect(@knife).to receive(:msg)
+
+      @knife.run
+    end
+
+    it 'should delete non-validator client if --delete-validators is set' do
+      @knife.config[:delete_validators] = true
+      expect(@client).to receive(:destroy).and_return(@client)
+      expect(@knife).to receive(:msg)
+
+      @knife.run
+    end
+
+    it 'should not delete validator client if --delete-validators is not set' do
+      @client.validator(true)
+      expect(@knife.ui).to receive(:fatal)
+      expect { @knife.run}.to raise_error(SystemExit)
+    end
+
+    it 'should delete validator client if --delete-validators is set' do
+      @knife.config[:delete_validators] = true
+      expect(@client).to receive(:destroy).and_return(@client)
+      expect(@knife).to receive(:msg)
+
+      @knife.run
     end
   end
 end

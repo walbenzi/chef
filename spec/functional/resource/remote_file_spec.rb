@@ -18,8 +18,10 @@
 
 require 'spec_helper'
 require 'tiny_server'
+require 'support/shared/functional/http'
 
 describe Chef::Resource::RemoteFile do
+  include ChefHTTPShared
 
   let(:file_cache_path) { Dir.mktmpdir }
 
@@ -52,28 +54,6 @@ describe Chef::Resource::RemoteFile do
 
   let(:default_mode) { ((0100666 - File.umask) & 07777).to_s(8) }
 
-  def start_tiny_server(server_opts={})
-    @server = TinyServer::Manager.new(server_opts)
-    @server.start
-    @api = TinyServer::API.instance
-    @api.clear
-    @api.get("/nyan_cat.png", 200) {
-      File.open(File.join(CHEF_SPEC_DATA, 'remote_file', 'nyan_cat.png'), "rb") do |f|
-        f.read
-      end
-    }
-    @api.get("/nyan_cat.png.gz", 200, nil, { 'Content-Type' => 'application/gzip', 'Content-Encoding' => 'gzip' } ) {
-      File.open(File.join(CHEF_SPEC_DATA, 'remote_file', 'nyan_cat.png.gz'), "rb") do |f|
-        f.read
-      end
-    }
-  end
-
-  def stop_tiny_server
-    @server.stop
-    @server = @api = nil
-  end
-
   context "when fetching files over HTTP" do
     before(:all) do
       start_tiny_server
@@ -83,15 +63,21 @@ describe Chef::Resource::RemoteFile do
       stop_tiny_server
     end
 
+    describe "when redownload isn't necessary" do
+      let(:source) { 'http://localhost:9000/seattle_capo.png' }
+
+      before do
+        @api.get("/seattle_capo.png", 304, "", { 'Etag' => 'abcdef' } )
+      end
+
+      it "does not fetch the file" do
+        resource.run_action(:create)
+      end
+    end
+
     context "when using normal encoding" do
       let(:source) { 'http://localhost:9000/nyan_cat.png' }
-      let(:expected_content) do
-        content = File.open(File.join(CHEF_SPEC_DATA, 'remote_file', 'nyan_cat.png'), "rb") do |f|
-          f.read
-        end
-        content.force_encoding(Encoding::BINARY) if content.respond_to?(:force_encoding)
-        content
-      end
+      let(:expected_content) { binread(nyan_uncompressed_filename) }
 
       it_behaves_like "a file resource"
 
@@ -100,18 +86,13 @@ describe Chef::Resource::RemoteFile do
 
     context "when using gzip encoding" do
       let(:source) { 'http://localhost:9000/nyan_cat.png.gz' }
-      let(:expected_content) do
-        content = File.open(File.join(CHEF_SPEC_DATA, 'remote_file', 'nyan_cat.png.gz'), "rb") do |f|
-          f.read
-        end
-        content.force_encoding(Encoding::BINARY) if content.respond_to?(:force_encoding)
-        content
-      end
+      let(:expected_content) { binread(nyan_compressed_filename) }
 
       it_behaves_like "a file resource"
 
       it_behaves_like "a securable resource with reporting"
     end
+
   end
 
   context "when fetching files over HTTPS" do
@@ -136,16 +117,124 @@ describe Chef::Resource::RemoteFile do
 
     let(:source) { 'https://localhost:9000/nyan_cat.png' }
 
-    let(:expected_content) do
-      content = File.open(File.join(CHEF_SPEC_DATA, 'remote_file', 'nyan_cat.png'), "rb") do |f|
-        f.read
-      end
-      content.force_encoding(Encoding::BINARY) if content.respond_to?(:force_encoding)
-      content
-    end
+    let(:expected_content) { binread(nyan_uncompressed_filename) }
 
     it_behaves_like "a file resource"
 
   end
 
+  context "when dealing with content length checking" do
+    before(:all) do
+      start_tiny_server
+    end
+
+    after(:all) do
+      stop_tiny_server
+    end
+
+    context "when downloading compressed data" do
+      let(:expected_content) { binread(nyan_uncompressed_filename) }
+      let(:source) { 'http://localhost:9000/nyan_cat_content_length_compressed.png' }
+
+      before do
+        expect(File).not_to exist(path)
+        resource.run_action(:create)
+      end
+
+      it "should create the file" do
+        expect(File).to exist(path)
+      end
+
+      it "should mark the resource as updated" do
+        expect(resource).to be_updated_by_last_action
+      end
+
+      it "has the correct content" do
+        expect(binread(path)).to eq(expected_content)
+      end
+    end
+
+    context "when downloding uncompressed data" do
+      let(:expected_content) { binread(nyan_uncompressed_filename) }
+      let(:source) { 'http://localhost:9000/nyan_cat_content_length.png' }
+
+      before do
+        expect(File).not_to exist(path)
+        resource.run_action(:create)
+      end
+
+      it "should create the file" do
+        expect(File).to exist(path)
+      end
+
+      it "should mark the resource as updated" do
+        expect(resource).to be_updated_by_last_action
+      end
+
+      it "has the correct content" do
+        expect(binread(path)).to eq(expected_content)
+      end
+    end
+
+    context "when downloading truncated compressed data" do
+      let(:source) { 'http://localhost:9000/nyan_cat_truncated_compressed.png' }
+
+      before do
+        expect(File).not_to exist(path)
+      end
+
+      it "should raise ContentLengthMismatch" do
+        expect { resource.run_action(:create) }.to raise_error(Chef::Exceptions::ContentLengthMismatch)
+        #File.should_not exist(path) # XXX: CHEF-5081
+      end
+    end
+
+    context "when downloding truncated uncompressed data" do
+      let(:source) { 'http://localhost:9000/nyan_cat_truncated.png' }
+
+      before do
+        expect(File).not_to exist(path)
+      end
+
+      it "should raise ContentLengthMismatch" do
+        expect { resource.run_action(:create) }.to raise_error(Chef::Exceptions::ContentLengthMismatch)
+        #File.should_not exist(path) # XXX: CHEF-5081
+      end
+    end
+
+    context "when downloding data with transfer-encoding set" do
+      let(:expected_content) { binread(nyan_uncompressed_filename) }
+      let(:source) { 'http://localhost:9000/nyan_cat_transfer_encoding.png' }
+
+      before do
+        expect(File).not_to exist(path)
+        resource.run_action(:create)
+      end
+
+      it "should create the file" do
+        expect(File).to exist(path)
+      end
+
+      it "should mark the resource as updated" do
+        expect(resource).to be_updated_by_last_action
+      end
+
+      it "has the correct content" do
+        expect(binread(path)).to eq(expected_content)
+      end
+    end
+
+    describe "when the download of the source raises an exception" do
+      let(:source) { 'http://localhost:0000/seattle_capo.png' }
+
+      before do
+        expect(File).not_to exist(path)
+      end
+
+      it "should not create the file" do
+        expect{ resource.run_action(:create) }.to raise_error
+        expect(File).not_to exist(path)
+      end
+    end
+  end
 end

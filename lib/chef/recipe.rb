@@ -23,6 +23,7 @@ require 'chef/dsl/data_query'
 require 'chef/dsl/platform_introspection'
 require 'chef/dsl/include_recipe'
 require 'chef/dsl/registry_helper'
+require 'chef/dsl/reboot_pending'
 
 require 'chef/mixin/from_file'
 
@@ -38,6 +39,7 @@ class Chef
     include Chef::DSL::IncludeRecipe
     include Chef::DSL::Recipe
     include Chef::DSL::RegistryHelper
+    include Chef::DSL::RebootPending
 
     include Chef::Mixin::FromFile
     include Chef::Mixin::Deprecation
@@ -67,7 +69,6 @@ class Chef
       @run_context = run_context
       # TODO: 5/19/2010 cw/tim: determine whether this can be removed
       @params = Hash.new
-      @node = deprecated_ivar(run_context.node, :node, :warn)
     end
 
     # Used in DSL mixins
@@ -95,6 +96,8 @@ class Chef
     # true<TrueClass>:: If all the parameters are present
     # false<FalseClass>:: If any of the parameters are missing
     def tagged?(*tags)
+      return false if run_context.node[:tags].nil?
+
       tags.each do |tag|
         return false unless run_context.node[:tags].include?(tag)
       end

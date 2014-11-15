@@ -15,12 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# chef/shell_out has been deprecated in favor of mixlib/shellout
-# chef/shell_out is still required here to ensure backward compatibility
-require 'chef/shell_out'
-
 require 'mixlib/shellout'
-require 'chef/config'
 
 class Chef
   module Mixin
@@ -31,17 +26,37 @@ class Chef
       # Generally speaking, 'extend Chef::Mixin::ShellOut' in your recipes and include 'Chef::Mixin::ShellOut' in your LWRPs
       # You can also call Mixlib::Shellout.new directly, but you lose all of the above functionality
 
+      # we use 'en_US.UTF-8' by default because we parse localized strings in English as an API and
+      # generally must support UTF-8 unicode.
       def shell_out(*command_args)
-        cmd = Mixlib::ShellOut.new(*run_command_compatible_options(command_args))
-        if STDOUT.tty? && !Chef::Config[:daemon] && Chef::Log.debug?
-          cmd.live_stream = STDOUT
+        args = command_args.dup
+        if args.last.is_a?(Hash)
+          options = args.pop.dup
+          env_key = options.has_key?(:env) ? :env : :environment
+          options[env_key] ||= {}
+          options[env_key] = options[env_key].dup
+          options[env_key]['LC_ALL'] ||= Chef::Config[:internal_locale] unless options[env_key].has_key?('LC_ALL')
+          args << options
+        else
+          args << { :environment => { 'LC_ALL' => Chef::Config[:internal_locale] } }
         end
-        cmd.run_command
+
+        shell_out_command(*args)
+      end
+
+      # call shell_out (using en_US.UTF-8) and raise errors
+      def shell_out!(*command_args)
+        cmd = shell_out(*command_args)
+        cmd.error!
         cmd
       end
 
-      def shell_out!(*command_args)
-        cmd= shell_out(*command_args)
+      def shell_out_with_systems_locale(*command_args)
+        shell_out_command(*command_args)
+      end
+
+      def shell_out_with_systems_locale!(*command_args)
+        cmd = shell_out_with_systems_locale(*command_args)
         cmd.error!
         cmd
       end
@@ -70,9 +85,27 @@ class Chef
 
       private
 
+      def shell_out_command(*command_args)
+        cmd = Mixlib::ShellOut.new(*run_command_compatible_options(command_args))
+        cmd.live_stream ||= io_for_live_stream
+        cmd.run_command
+        cmd
+      end
+
       def deprecate_option(old_option, new_option)
         Chef::Log.logger.warn "DEPRECATION: Chef::Mixin::ShellOut option :#{old_option} is deprecated. Use :#{new_option}"
+      end
+
+      def io_for_live_stream
+        if STDOUT.tty? && !Chef::Config[:daemon] && Chef::Log.debug?
+          STDOUT
+        else
+          nil
+        end
       end
     end
   end
 end
+
+# Break circular dep
+require 'chef/config'

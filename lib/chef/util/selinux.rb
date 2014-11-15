@@ -21,6 +21,7 @@
 # limitations under the License.
 
 require 'chef/mixin/shell_out'
+require 'chef/mixin/which'
 
 class Chef
   class Util
@@ -32,6 +33,7 @@ class Chef
     module Selinux
 
       include Chef::Mixin::ShellOut
+      include Chef::Mixin::Which
 
       # We want to initialize below variables once during a
       # chef-client run therefore they are class variables.
@@ -47,7 +49,7 @@ class Chef
       def restore_security_context(file_path, recursive = false)
         if restorecon_path
           restorecon_command = recursive ? "#{restorecon_path} -R -r" : "#{restorecon_path} -R"
-          restorecon_command += " #{file_path}"
+          restorecon_command += " \"#{file_path}\""
           Chef::Log.debug("Restoring selinux security content with #{restorecon_command}")
           shell_out!(restorecon_command)
         else
@@ -65,15 +67,6 @@ class Chef
       def selinuxenabled_path
         @@selinuxenabled_path = which("selinuxenabled") if @@selinuxenabled_path.nil?
         @@selinuxenabled_path
-      end
-
-      def which(cmd)
-        paths = ENV['PATH'].split(File::PATH_SEPARATOR) + [ '/bin', '/usr/bin', '/sbin', '/usr/sbin' ]
-        paths.each do |path|
-          filename = File.join(path, cmd)
-          return filename if File.executable?(filename)
-        end
-        false
       end
 
       def check_selinux_enabled?
@@ -97,4 +90,3 @@ class Chef
     end
   end
 end
-

@@ -16,17 +16,16 @@
 # limitations under the License.
 #
 
-
+require 'chef/exceptions'
 require 'chef/log'
 require 'chef/provider'
-require 'chef/mixin/shell_out'
 require 'fileutils'
 
 class Chef
   class Provider
     class Git < Chef::Provider
 
-      include Chef::Mixin::ShellOut
+      provides :git
 
       def whyrun_supported?
         true
@@ -50,7 +49,6 @@ class Chef
             "Cannot clone #{@new_resource} to #{@new_resource.destination}, the enclosing directory #{dirname} does not exist")
         end
 
-
         requirements.assert(:all_actions) do |a|
           a.assertion { !(@new_resource.revision =~ /^origin\//) }
           a.failure_message Chef::Exceptions::InvalidRemoteGitReference,
@@ -68,14 +66,16 @@ class Chef
           a.failure_message Chef::Exceptions::UnresolvableGitReference,
             "Unable to parse SHA reference for '#{@new_resource.revision}' in repository '#{@new_resource.repository}'. " +
             "Verify your (case-sensitive) repository URL and revision.\n" +
-            "`git ls-remote` output: #{@resolved_reference}"
+            "`git ls-remote '#{@new_resource.repository}' '#{rev_search_pattern}'` output: #{@resolved_reference}"
         end
       end
 
       def action_checkout
         if target_dir_non_existent_or_empty?
           clone
-          checkout
+          if @new_resource.enable_checkout
+            checkout
+          end
           enable_submodules
           add_remotes
         else
@@ -92,8 +92,7 @@ class Chef
 
       def action_sync
         if existing_git_clone?
-          current_rev = find_current_revision
-          Chef::Log.debug "#{@new_resource} current revision: #{current_rev} target revision: #{target_revision}"
+          Chef::Log.debug "#{@new_resource} current revision: #{@current_resource.revision} target revision: #{target_revision}"
           unless current_revision_matches_target_revision?
             fetch_updates
             enable_submodules
@@ -105,6 +104,9 @@ class Chef
         end
       end
 
+      def git_minor_version
+        @git_minor_version ||= Gem::Version.new(shell_out!('git --version', run_options).stdout.split.last)
+      end
 
       def existing_git_clone?
         ::File.exist?(::File.join(@new_resource.destination, ".git"))
@@ -141,6 +143,7 @@ class Chef
           args = []
           args << "-o #{remote}" unless remote == 'origin'
           args << "--depth #{@new_resource.depth}" if @new_resource.depth
+          args << "--no-single-branch" if @new_resource.depth and git_minor_version >= Gem::Version.new('1.7.10')
 
           Chef::Log.info "#{@new_resource} cloning repo #{@new_resource.repository} to #{@new_resource.destination}"
 
@@ -151,10 +154,12 @@ class Chef
 
       def checkout
         sha_ref = target_revision
+
         converge_by("checkout ref #{sha_ref} branch #{@new_resource.revision}") do
           # checkout into a local branch rather than a detached HEAD
-          shell_out!("git checkout -b deploy #{sha_ref}", run_options(:cwd => @new_resource.destination))
-          Chef::Log.info "#{@new_resource} checked out branch: #{@new_resource.revision} reference: #{sha_ref}"
+          shell_out!("git branch -f #{@new_resource.checkout_branch} #{sha_ref}", run_options(:cwd => @new_resource.destination))
+          shell_out!("git checkout #{@new_resource.checkout_branch}", run_options(:cwd => @new_resource.destination))
+          Chef::Log.info "#{@new_resource} checked out branch: #{@new_resource.revision} onto: #{@new_resource.checkout_branch} reference: #{sha_ref}"
         end
       end
 
@@ -237,44 +242,79 @@ class Chef
         # annotated tags, we have to search for "revision*" and
         # post-process. Special handling for 'HEAD' to ignore a tag
         # named 'HEAD'.
-        rev_pattern = case @new_resource.revision
-                      when '', 'HEAD'
-                        'HEAD'
-                      else
-                        @new_resource.revision + '*'
-                      end
-        command = git("ls-remote \"#{@new_resource.repository}\"", rev_pattern)
-        @resolved_reference = shell_out!(command, run_options).stdout
-        ref_lines = @resolved_reference.split("\n")
-        refs = ref_lines.map { |line| line.split("\t") }
-        # first try for ^{} indicating the commit pointed to by an
-        # annotated tag
-        tagged_commit = refs.find { |m| m[1].end_with?("#{@new_resource.revision}^{}") }
+        @resolved_reference = git_ls_remote(rev_search_pattern)
+        refs = @resolved_reference.split("\n").map { |line| line.split("\t") }
+        # First try for ^{} indicating the commit pointed to by an
+        # annotated tag.
         # It is possible for a user to create a tag named 'HEAD'.
         # Using such a degenerate annotated tag would be very
         # confusing. We avoid the issue by disallowing the use of
         # annotated tags named 'HEAD'.
-        if tagged_commit && rev_pattern != 'HEAD'
-          tagged_commit[0]
+        if rev_search_pattern != 'HEAD'
+          found = find_revision(refs, @new_resource.revision, '^{}')
         else
-          found = refs.find { |m| m[1].end_with?(@new_resource.revision) }
-          if found
-            found[0]
-          else
-            nil
-          end
+          found = refs_search(refs, 'HEAD')
         end
+        found = find_revision(refs, @new_resource.revision) if found.empty?
+        found.size == 1 ? found.first[0] : nil
+      end
+
+      def find_revision(refs, revision, suffix="")
+        found = refs_search(refs, rev_match_pattern('refs/tags/', revision) + suffix)
+        found = refs_search(refs, rev_match_pattern('refs/heads/', revision) + suffix) if found.empty?
+        found = refs_search(refs, revision + suffix) if found.empty?
+        found
+      end
+
+      def rev_match_pattern(prefix, revision)
+        if revision.start_with?(prefix)
+          revision
+        else
+          prefix + revision
+        end
+      end
+
+      def rev_search_pattern
+        if ['', 'HEAD'].include? @new_resource.revision
+          'HEAD'
+        else
+          @new_resource.revision + '*'
+        end
+      end
+
+      def git_ls_remote(rev_pattern)
+        command = git(%Q(ls-remote "#{@new_resource.repository}" "#{rev_pattern}"))
+        shell_out!(command, run_options).stdout
+      end
+
+      def refs_search(refs, pattern)
+        refs.find_all { |m| m[1] == pattern }
       end
 
       private
 
       def run_options(run_opts={})
-        run_opts[:user] = @new_resource.user if @new_resource.user
+        env = {}
+        if @new_resource.user
+          run_opts[:user] = @new_resource.user
+          # Certain versions of `git` misbehave if git configuration is
+          # inaccessible in $HOME. We need to ensure $HOME matches the
+          # user who is executing `git` not the user running Chef.
+          env['HOME'] = begin
+            require 'etc'
+            Etc.getpwnam(@new_resource.user).dir
+          rescue ArgumentError # user not found
+            raise Chef::Exceptions::User, "Could not determine HOME for specified user '#{@new_resource.user}' for resource '#{@new_resource.name}'"
+          end
+        end
         run_opts[:group] = @new_resource.group if @new_resource.group
-        run_opts[:environment] = {"GIT_SSH" => @new_resource.ssh_wrapper} if @new_resource.ssh_wrapper
+        env['GIT_SSH'] = @new_resource.ssh_wrapper if @new_resource.ssh_wrapper
         run_opts[:log_tag] = @new_resource.to_s
         run_opts[:timeout] = @new_resource.timeout if @new_resource.timeout
+        env.merge!(@new_resource.environment) if @new_resource.environment
+        run_opts[:environment] = env unless env.empty?
         run_opts
+
       end
 
       def cwd

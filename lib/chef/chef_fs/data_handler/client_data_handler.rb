@@ -9,12 +9,11 @@ class Chef
           defaults = {
             'name' => remove_dot_json(entry.name),
             'clientname' => remove_dot_json(entry.name),
-            'orgname' => entry.org,
             'admin' => false,
             'validator' => false,
             'chef_type' => 'client'
           }
-          if entry.org
+          if entry.respond_to?(:org) && entry.org
             defaults['orgname'] = entry.org
           end
           result = normalize_hash(client, defaults)
@@ -23,7 +22,7 @@ class Chef
           result
         end
 
-        def preserve_key(key)
+        def preserve_key?(key)
           return key == 'name'
         end
 

@@ -151,7 +151,7 @@ module Shell
 
     def rebuild_node
       Chef::Config[:solo] = true
-      @client = Chef::Client.new
+      @client = Chef::Client.new(nil, Chef::Config[:shell_config])
       @client.run_ohai
       @client.load_node
       @client.build_node
@@ -169,7 +169,7 @@ module Shell
 
     def rebuild_context
       @run_status = Chef::RunStatus.new(@node, @events)
-      Chef::Cookbook::FileVendor.on_create { |manifest| Chef::Cookbook::FileSystemFileVendor.new(manifest, Chef::Config[:cookbook_path]) }
+      Chef::Cookbook::FileVendor.fetch_from_disk(Chef::Config[:cookbook_path])
       cl = Chef::CookbookLoader.new(Chef::Config[:cookbook_path])
       cl.load_cookbooks
       cookbook_collection = Chef::CookbookCollection.new(cl)
@@ -183,7 +183,7 @@ module Shell
     def rebuild_node
       # Tell the client we're chef solo so it won't try to contact the server
       Chef::Config[:solo] = true
-      @client = Chef::Client.new
+      @client = Chef::Client.new(nil, Chef::Config[:shell_config])
       @client.run_ohai
       @client.load_node
       @client.build_node
@@ -201,7 +201,7 @@ module Shell
 
     def rebuild_context
       @run_status = Chef::RunStatus.new(@node, @events)
-      Chef::Cookbook::FileVendor.on_create { |manifest| Chef::Cookbook::RemoteFileVendor.new(manifest, Chef::REST.new(Chef::Config[:server_url])) }
+      Chef::Cookbook::FileVendor.fetch_from_remote(Chef::REST.new(Chef::Config[:chef_server_url]))
       cookbook_hash = @client.sync_cookbooks
       cookbook_collection = Chef::CookbookCollection.new(cookbook_hash)
       @run_context = Chef::RunContext.new(node, cookbook_collection, @events)
@@ -214,7 +214,7 @@ module Shell
     def rebuild_node
       # Make sure the client knows this is not chef solo
       Chef::Config[:solo] = false
-      @client = Chef::Client.new
+      @client = Chef::Client.new(nil, Chef::Config[:shell_config])
       @client.run_ohai
       @client.register
       @client.load_node

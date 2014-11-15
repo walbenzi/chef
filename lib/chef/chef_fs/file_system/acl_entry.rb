@@ -32,15 +32,15 @@ class Chef
         end
 
         def delete(recurse)
-          raise Chef::ChefFS::FileSystem::OperationNotAllowedError.new(:delete, self, e), "ACLs cannot be deleted."
+          raise Chef::ChefFS::FileSystem::OperationNotAllowedError.new(:delete, self), "ACLs cannot be deleted."
         end
 
         def write(file_contents)
           # ACL writes are fun.
-          acls = data_handler.normalize(JSON.parse(file_contents, :create_additions => false), self)
+          acls = data_handler.normalize(Chef::JSONCompat.parse(file_contents), self)
           PERMISSIONS.each do |permission|
             begin
-              rest.put_rest("#{api_path}/#{permission}", { permission => acls[permission] })
+              rest.put("#{api_path}/#{permission}", { permission => acls[permission] })
             rescue Timeout::Error => e
               raise Chef::ChefFS::FileSystem::OperationFailedError.new(:write, self, e), "Timeout writing: #{e}"
             rescue Net::HTTPServerException => e

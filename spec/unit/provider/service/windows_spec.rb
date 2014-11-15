@@ -24,212 +24,344 @@ describe Chef::Provider::Service::Windows, "load_current_resource" do
     @node = Chef::Node.new
     @events = Chef::EventDispatch::Dispatcher.new
     @run_context = Chef::RunContext.new(@node, {}, @events)
-    @new_resource = Chef::Resource::Service.new("chef")
+    @new_resource = Chef::Resource::WindowsService.new("chef")
     @provider = Chef::Provider::Service::Windows.new(@new_resource, @run_context)
+    @provider.current_resource = Chef::Resource::WindowsService.new("current-chef")
     Object.send(:remove_const, 'Win32') if defined?(Win32)
     Win32 = Module.new
     Win32::Service = Class.new
     Win32::Service::AUTO_START = 0x00000002
+    Win32::Service::DEMAND_START = 0x00000003
     Win32::Service::DISABLED = 0x00000004
-    Win32::Service.stub!(:status).with(@new_resource.service_name).and_return(
-      mock("StatusStruct", :current_state => "running"))
-    Win32::Service.stub!(:config_info).with(@new_resource.service_name).and_return(
-      mock("ConfigStruct", :start_type => "auto start"))
-    Win32::Service.stub!(:exists?).and_return(true)
+    allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+      double("StatusStruct", :current_state => "running"))
+    allow(Win32::Service).to receive(:config_info).with(@new_resource.service_name).and_return(
+      double("ConfigStruct", :start_type => "auto start"))
+    allow(Win32::Service).to receive(:exists?).and_return(true)
   end
 
   it "should set the current resources service name to the new resources service name" do
     @provider.load_current_resource
-    @provider.current_resource.service_name.should == 'chef'
+    expect(@provider.current_resource.service_name).to eq('chef')
   end
 
   it "should return the current resource" do
-    @provider.load_current_resource.should equal(@provider.current_resource)
+    expect(@provider.load_current_resource).to equal(@provider.current_resource)
   end
 
   it "should set the current resources status" do
     @provider.load_current_resource
-    @provider.current_resource.running.should be_true
+    expect(@provider.current_resource.running).to be_truthy
   end
 
   it "should set the current resources start type" do
     @provider.load_current_resource
-    @provider.current_resource.enabled.should be_true
+    expect(@provider.current_resource.enabled).to be_truthy
+  end
+
+  it "does not set the current resources start type if it is neither AUTO START or DISABLED" do
+    allow(Win32::Service).to receive(:config_info).with(@new_resource.service_name).and_return(
+      double("ConfigStruct", :start_type => "manual"))
+    @provider.load_current_resource
+    expect(@provider.current_resource.enabled).to be_nil
   end
 
   describe Chef::Provider::Service::Windows, "start_service" do
     before(:each) do
-      Win32::Service.stub!(:status).with(@new_resource.service_name).and_return(
-        mock("StatusStruct", :current_state => "stopped"),
-        mock("StatusStruct", :current_state => "running"))
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "stopped"),
+        double("StatusStruct", :current_state => "running"))
     end
 
     it "should call the start command if one is specified" do
       @new_resource.start_command "sc start chef"
-      @provider.should_receive(:shell_out!).with("#{@new_resource.start_command}").and_return("Starting custom service")
+      expect(@provider).to receive(:shell_out!).with("#{@new_resource.start_command}").and_return("Starting custom service")
       @provider.start_service
-      @new_resource.updated_by_last_action?.should be_true
+      expect(@new_resource.updated_by_last_action?).to be_truthy
     end
 
     it "should use the built-in command if no start command is specified" do
-      Win32::Service.should_receive(:start).with(@new_resource.service_name)
+      expect(Win32::Service).to receive(:start).with(@new_resource.service_name)
       @provider.start_service
-      @new_resource.updated_by_last_action?.should be_true
+      expect(@new_resource.updated_by_last_action?).to be_truthy
     end
 
     it "should do nothing if the service does not exist" do
-      Win32::Service.stub!(:exists?).with(@new_resource.service_name).and_return(false)
-      Win32::Service.should_not_receive(:start).with(@new_resource.service_name)
+      allow(Win32::Service).to receive(:exists?).with(@new_resource.service_name).and_return(false)
+      expect(Win32::Service).not_to receive(:start).with(@new_resource.service_name)
       @provider.start_service
-      @new_resource.updated_by_last_action?.should be_false
+      expect(@new_resource.updated_by_last_action?).to be_falsey
     end
 
     it "should do nothing if the service is running" do
-      Win32::Service.stub!(:status).with(@new_resource.service_name).and_return(
-        mock("StatusStruct", :current_state => "running"))
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "running"))
       @provider.load_current_resource
-      Win32::Service.should_not_receive(:start).with(@new_resource.service_name)
+      expect(Win32::Service).not_to receive(:start).with(@new_resource.service_name)
       @provider.start_service
-      @new_resource.updated_by_last_action?.should be_false
+      expect(@new_resource.updated_by_last_action?).to be_falsey
     end
+
+    it "should raise an error if the service is paused" do
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "paused"))
+      @provider.load_current_resource
+      expect(Win32::Service).not_to receive(:start).with(@new_resource.service_name)
+      expect { @provider.start_service }.to raise_error( Chef::Exceptions::Service )
+      expect(@new_resource.updated_by_last_action?).to be_falsey
+    end
+
+    it "should wait and continue if the service is in start_pending" do
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "start pending"),
+        double("StatusStruct", :current_state => "start pending"),
+        double("StatusStruct", :current_state => "running"))
+      @provider.load_current_resource
+      expect(Win32::Service).not_to receive(:start).with(@new_resource.service_name)
+      @provider.start_service
+      expect(@new_resource.updated_by_last_action?).to be_falsey
+    end
+
+    it "should fail if the service is in stop_pending" do
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "stop pending"))
+      @provider.load_current_resource
+      expect(Win32::Service).not_to receive(:start).with(@new_resource.service_name)
+      expect { @provider.start_service }.to raise_error( Chef::Exceptions::Service )
+      expect(@new_resource.updated_by_last_action?).to be_falsey
+    end
+
   end
+
 
   describe Chef::Provider::Service::Windows, "stop_service" do
 
     before(:each) do
-      Win32::Service.stub!(:status).with(@new_resource.service_name).and_return(
-        mock("StatusStruct", :current_state => "running"),
-        mock("StatusStruct", :current_state => "stopped"))
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "running"),
+        double("StatusStruct", :current_state => "stopped"))
     end
 
     it "should call the stop command if one is specified" do
       @new_resource.stop_command "sc stop chef"
-      @provider.should_receive(:shell_out!).with("#{@new_resource.stop_command}").and_return("Stopping custom service")
+      expect(@provider).to receive(:shell_out!).with("#{@new_resource.stop_command}").and_return("Stopping custom service")
       @provider.stop_service
-      @new_resource.updated_by_last_action?.should be_true
+      expect(@new_resource.updated_by_last_action?).to be_truthy
     end
 
     it "should use the built-in command if no stop command is specified" do
-      Win32::Service.should_receive(:stop).with(@new_resource.service_name)
+      expect(Win32::Service).to receive(:stop).with(@new_resource.service_name)
       @provider.stop_service
-      @new_resource.updated_by_last_action?.should be_true
+      expect(@new_resource.updated_by_last_action?).to be_truthy
     end
 
     it "should do nothing if the service does not exist" do
-      Win32::Service.stub!(:exists?).with(@new_resource.service_name).and_return(false)
-      Win32::Service.should_not_receive(:stop).with(@new_resource.service_name)
+      allow(Win32::Service).to receive(:exists?).with(@new_resource.service_name).and_return(false)
+      expect(Win32::Service).not_to receive(:stop).with(@new_resource.service_name)
       @provider.stop_service
-      @new_resource.updated_by_last_action?.should be_false
+      expect(@new_resource.updated_by_last_action?).to be_falsey
     end
 
     it "should do nothing if the service is stopped" do
-      Win32::Service.stub!(:status).with(@new_resource.service_name).and_return(
-        mock("StatusStruct", :current_state => "stopped"))
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "stopped"))
       @provider.load_current_resource
-      Win32::Service.should_not_receive(:stop).with(@new_resource.service_name)
+      expect(Win32::Service).not_to receive(:stop).with(@new_resource.service_name)
       @provider.stop_service
-      @new_resource.updated_by_last_action?.should be_false
+      expect(@new_resource.updated_by_last_action?).to be_falsey
     end
+
+    it "should raise an error if the service is paused" do
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "paused"))
+      @provider.load_current_resource
+      expect(Win32::Service).not_to receive(:start).with(@new_resource.service_name)
+      expect { @provider.stop_service }.to raise_error( Chef::Exceptions::Service )
+      expect(@new_resource.updated_by_last_action?).to be_falsey
+    end
+
+    it "should wait and continue if the service is in stop_pending" do
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "stop pending"),
+        double("StatusStruct", :current_state => "stop pending"),
+        double("StatusStruct", :current_state => "stopped"))
+      @provider.load_current_resource
+      expect(Win32::Service).not_to receive(:stop).with(@new_resource.service_name)
+      @provider.stop_service
+      expect(@new_resource.updated_by_last_action?).to be_falsey
+    end
+
+    it "should fail if the service is in start_pending" do
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "start pending"))
+      @provider.load_current_resource
+      expect(Win32::Service).not_to receive(:stop).with(@new_resource.service_name)
+      expect { @provider.stop_service }.to raise_error( Chef::Exceptions::Service )
+      expect(@new_resource.updated_by_last_action?).to be_falsey
+    end
+
+    it "should pass custom timeout to the stop command if provided" do
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "running"))
+      @new_resource.timeout 1
+      expect(Win32::Service).to receive(:stop).with(@new_resource.service_name)
+      Timeout.timeout(2) do
+        expect { @provider.stop_service }.to raise_error(Timeout::Error)
+      end
+      expect(@new_resource.updated_by_last_action?).to be_falsey
+    end
+
   end
 
   describe Chef::Provider::Service::Windows, "restart_service" do
 
     it "should call the restart command if one is specified" do
       @new_resource.restart_command "sc restart"
-      @provider.should_receive(:shell_out!).with("#{@new_resource.restart_command}")
+      expect(@provider).to receive(:shell_out!).with("#{@new_resource.restart_command}")
       @provider.restart_service
-      @new_resource.updated_by_last_action?.should be_true
+      expect(@new_resource.updated_by_last_action?).to be_truthy
     end
 
     it "should stop then start the service if it is running" do
-      Win32::Service.stub!(:status).with(@new_resource.service_name).and_return(
-        mock("StatusStruct", :current_state => "running"),
-        mock("StatusStruct", :current_state => "stopped"),
-        mock("StatusStruct", :current_state => "stopped"),
-        mock("StatusStruct", :current_state => "running"))
-      Win32::Service.should_receive(:stop).with(@new_resource.service_name)
-      Win32::Service.should_receive(:start).with(@new_resource.service_name)
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "running"),
+        double("StatusStruct", :current_state => "stopped"),
+        double("StatusStruct", :current_state => "stopped"),
+        double("StatusStruct", :current_state => "running"))
+      expect(Win32::Service).to receive(:stop).with(@new_resource.service_name)
+      expect(Win32::Service).to receive(:start).with(@new_resource.service_name)
       @provider.restart_service
-      @new_resource.updated_by_last_action?.should be_true
+      expect(@new_resource.updated_by_last_action?).to be_truthy
     end
 
     it "should just start the service if it is stopped" do
-      Win32::Service.stub!(:status).with(@new_resource.service_name).and_return(
-        mock("StatusStruct", :current_state => "stopped"),
-        mock("StatusStruct", :current_state => "stopped"),
-        mock("StatusStruct", :current_state => "running"))
-      Win32::Service.should_receive(:start).with(@new_resource.service_name)
+      allow(Win32::Service).to receive(:status).with(@new_resource.service_name).and_return(
+        double("StatusStruct", :current_state => "stopped"),
+        double("StatusStruct", :current_state => "stopped"),
+        double("StatusStruct", :current_state => "running"))
+      expect(Win32::Service).to receive(:start).with(@new_resource.service_name)
       @provider.restart_service
-      @new_resource.updated_by_last_action?.should be_true
+      expect(@new_resource.updated_by_last_action?).to be_truthy
     end
 
     it "should do nothing if the service does not exist" do
-      Win32::Service.stub!(:exists?).with(@new_resource.service_name).and_return(false)
-      Win32::Service.should_not_receive(:stop).with(@new_resource.service_name)
-      Win32::Service.should_not_receive(:start).with(@new_resource.service_name)
+      allow(Win32::Service).to receive(:exists?).with(@new_resource.service_name).and_return(false)
+      expect(Win32::Service).not_to receive(:stop).with(@new_resource.service_name)
+      expect(Win32::Service).not_to receive(:start).with(@new_resource.service_name)
       @provider.restart_service
-      @new_resource.updated_by_last_action?.should be_false
+      expect(@new_resource.updated_by_last_action?).to be_falsey
     end
 
   end
 
   describe Chef::Provider::Service::Windows, "enable_service" do
-
     before(:each) do
-      Win32::Service.stub!(:config_info).with(@new_resource.service_name).and_return(
-        mock("ConfigStruct", :start_type => "disabled"))
+      allow(Win32::Service).to receive(:config_info).with(@new_resource.service_name).and_return(
+        double("ConfigStruct", :start_type => "disabled"))
     end
 
     it "should enable service" do
-      Win32::Service.should_receive(:configure).with(:service_name => @new_resource.service_name, :start_type => Win32::Service::AUTO_START)
+      expect(Win32::Service).to receive(:configure).with(:service_name => @new_resource.service_name, :start_type => Win32::Service::AUTO_START)
       @provider.enable_service
-      @new_resource.updated_by_last_action?.should be_true
+      expect(@new_resource.updated_by_last_action?).to be_truthy
     end
 
     it "should do nothing if the service does not exist" do
-      Win32::Service.stub!(:exists?).with(@new_resource.service_name).and_return(false)
-      Win32::Service.should_not_receive(:configure)
+      allow(Win32::Service).to receive(:exists?).with(@new_resource.service_name).and_return(false)
+      expect(Win32::Service).not_to receive(:configure)
       @provider.enable_service
-      @new_resource.updated_by_last_action?.should be_false
+      expect(@new_resource.updated_by_last_action?).to be_falsey
+    end
+  end
+
+  describe Chef::Provider::Service::Windows, "action_enable" do
+    it "does nothing if the service is enabled" do
+      allow(Win32::Service).to receive(:config_info).with(@new_resource.service_name).and_return(
+        double("ConfigStruct", :start_type => "auto start"))
+      expect(@provider).not_to receive(:enable_service)
+      @provider.action_enable
     end
 
-    it "should do nothing if the service is enabled" do
-      Win32::Service.stub!(:config_info).with(@new_resource.service_name).and_return(
-        mock("ConfigStruct", :start_type => "auto start"))
-      Win32::Service.should_not_receive(:configure)
-      @provider.enable_service
-      @new_resource.updated_by_last_action?.should be_false
+    it "enables the service if it is not set to automatic start" do
+      allow(Win32::Service).to receive(:config_info).with(@new_resource.service_name).and_return(
+        double("ConfigStruct", :start_type => "disabled"))
+      expect(@provider).to receive(:enable_service)
+      @provider.action_enable
+    end
+  end
+
+  describe Chef::Provider::Service::Windows, "action_disable" do
+    it "does nothing if the service is disabled" do
+      allow(Win32::Service).to receive(:config_info).with(@new_resource.service_name).and_return(
+        double("ConfigStruct", :start_type => "disabled"))
+      expect(@provider).not_to receive(:disable_service)
+      @provider.action_disable
+    end
+
+    it "disables the service if it is not set to disabled" do
+      allow(Win32::Service).to receive(:config_info).with(@new_resource.service_name).and_return(
+        double("ConfigStruct", :start_type => "auto start"))
+      expect(@provider).to receive(:disable_service)
+      @provider.action_disable
     end
   end
 
   describe Chef::Provider::Service::Windows, "disable_service" do
-
     before(:each) do
-      Win32::Service.stub!(:config_info).with(@new_resource.service_name).and_return(
-        mock("ConfigStruct", :start_type => "auto start"))
+      allow(Win32::Service).to receive(:config_info).with(@new_resource.service_name).and_return(
+        double("ConfigStruct", :start_type => "auto start"))
     end
 
     it "should disable service" do
-      Win32::Service.should_receive(:configure).with(:service_name => @new_resource.service_name, :start_type => Win32::Service::DISABLED)
+      expect(Win32::Service).to receive(:configure)
       @provider.disable_service
-      @new_resource.updated_by_last_action?.should be_true
+      expect(@new_resource.updated_by_last_action?).to be_truthy
     end
 
     it "should do nothing if the service does not exist" do
-      Win32::Service.stub!(:exists?).with(@new_resource.service_name).and_return(false)
-      Win32::Service.should_not_receive(:configure)
+      allow(Win32::Service).to receive(:exists?).with(@new_resource.service_name).and_return(false)
+      expect(Win32::Service).not_to receive(:configure)
       @provider.disable_service
-      @new_resource.updated_by_last_action?.should be_false
+      expect(@new_resource.updated_by_last_action?).to be_falsey
+    end
+  end
+
+  describe Chef::Provider::Service::Windows, "action_configure_startup" do
+    { :automatic => "auto start", :manual => "demand start", :disabled => "disabled" }.each do |type,win32|
+      it "sets the startup type to #{type} if it is something else" do
+        @new_resource.startup_type(type)
+        allow(@provider).to receive(:current_start_type).and_return("fire")
+        expect(@provider).to receive(:set_startup_type).with(type)
+        @provider.action_configure_startup
+      end
+
+      it "leaves the startup type as #{type} if it is already set" do
+        @new_resource.startup_type(type)
+        allow(@provider).to receive(:current_start_type).and_return(win32)
+        expect(@provider).not_to receive(:set_startup_type).with(type)
+        @provider.action_configure_startup
+      end
+    end
+  end
+
+  describe Chef::Provider::Service::Windows, "set_start_type" do
+    it "when called with :automatic it calls Win32::Service#configure with Win32::Service::AUTO_START" do
+      expect(Win32::Service).to receive(:configure).with(:service_name => @new_resource.service_name, :start_type => Win32::Service::AUTO_START)
+      @provider.send(:set_startup_type, :automatic)
     end
 
-    it "should do nothing if the service is disabled" do
-      Win32::Service.stub!(:config_info).with(@new_resource.service_name).and_return(
-        mock("ConfigStruct", :start_type => "disabled"))
-      @provider.load_current_resource
-      Win32::Service.should_not_receive(:configure)
-      @provider.disable_service
-      @new_resource.updated_by_last_action?.should be_false
+    it "when called with :manual it calls Win32::Service#configure with Win32::Service::DEMAND_START" do
+      expect(Win32::Service).to receive(:configure).with(:service_name => @new_resource.service_name, :start_type => Win32::Service::DEMAND_START)
+      @provider.send(:set_startup_type, :manual)
     end
 
+    it "when called with :disabled it calls Win32::Service#configure with Win32::Service::DISABLED" do
+      expect(Win32::Service).to receive(:configure).with(:service_name => @new_resource.service_name, :start_type => Win32::Service::DISABLED)
+      @provider.send(:set_startup_type, :disabled)
+    end
+
+    it "raises an exception when given an unknown start type" do
+      expect { @provider.send(:set_startup_type, :fire_truck) }.to raise_error(Chef::Exceptions::ConfigurationError)
+    end
   end
 end

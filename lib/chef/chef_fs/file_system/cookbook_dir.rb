@@ -32,7 +32,7 @@ class Chef
           @exists = options[:exists]
           # If the name is apache2-1.0.0 and versioned_cookbooks is on, we know
           # the actual cookbook_name and version.
-          if Chef::Config[:versioned_cookbooks]
+          if root.versioned_cookbooks
             if name =~ VALID_VERSIONED_COOKBOOK_NAME
               @cookbook_name = $1
               @version = $2
@@ -126,7 +126,7 @@ class Chef
         def delete(recurse)
           if recurse
             begin
-              rest.delete_rest(api_path)
+              rest.delete(api_path)
             rescue Timeout::Error => e
               raise Chef::ChefFS::FileSystem::OperationFailedError.new(:delete, self, e), "Timeout deleting: #{e}"
             rescue Net::HTTPServerException
@@ -191,7 +191,7 @@ class Chef
             old_retry_count = Chef::Config[:http_retry_count]
             begin
               Chef::Config[:http_retry_count] = 0
-              @chef_object ||= Chef::CookbookVersion.json_create(Chef::ChefFS::RawRequest.raw_json(rest, api_path))
+              @chef_object ||= Chef::CookbookVersion.json_create(root.get_json(api_path))
             ensure
               Chef::Config[:http_retry_count] = old_retry_count
             end

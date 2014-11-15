@@ -23,12 +23,12 @@ class Chef
   class Resource
     class ChefGem < Chef::Resource::Package::GemPackage
 
-      provides :chef_gem, :on_platforms => :all
+      provides :chef_gem
 
       def initialize(name, run_context=nil)
         super
         @resource_name = :chef_gem
-        @provider = Chef::Provider::Package::Rubygems
+        @gem_binary = RbConfig::CONFIG['bindir'] + "/gem"
       end
 
       # The chef_gem resources is for installing gems to the current gem environment only for use by Chef cookbooks.
@@ -37,7 +37,7 @@ class Chef
           raise ArgumentError, "The chef_gem resource is restricted to the current gem environment, use gem_package to install to other environments."
         end
 
-        nil
+        @gem_binary
       end
 
       def after_created

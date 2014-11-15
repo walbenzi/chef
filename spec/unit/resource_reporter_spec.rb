@@ -21,6 +21,7 @@
 
 require File.expand_path("../../spec_helper", __FILE__)
 require 'chef/resource_reporter'
+require 'socket'
 
 describe Chef::ResourceReporter do
   before(:all) do
@@ -35,39 +36,40 @@ describe Chef::ResourceReporter do
   before do
     @node = Chef::Node.new
     @node.name("spitfire")
-    @rest_client = mock("Chef::REST (mock)")
-    @rest_client.stub!(:post_rest).and_return(true)
+    @rest_client = double("Chef::REST (mock)")
+    allow(@rest_client).to receive(:post_rest).and_return(true)
     @resource_reporter = Chef::ResourceReporter.new(@rest_client)
-    @run_id = @resource_reporter.run_id
     @new_resource      = Chef::Resource::File.new("/tmp/a-file.txt")
-    @new_resource.cookbook_name = "monkey"
-    @cookbook_version = mock("Cookbook::Version", :version => "1.2.3")
-    @new_resource.stub!(:cookbook_version).and_return(@cookbook_version)
+    @cookbook_name = "monkey"
+    @new_resource.cookbook_name = @cookbook_name
+    @cookbook_version = double("Cookbook::Version", :version => "1.2.3")
+    allow(@new_resource).to receive(:cookbook_version).and_return(@cookbook_version)
     @current_resource  = Chef::Resource::File.new("/tmp/a-file.txt")
     @start_time = Time.new
     @end_time = Time.new + 20
     @events = Chef::EventDispatch::Dispatcher.new
     @run_context = Chef::RunContext.new(@node, {}, @events)
     @run_status = Chef::RunStatus.new(@node, @events)
-    Time.stub!(:now).and_return(@start_time, @end_time)
+    @run_id = @run_status.run_id
+    allow(Time).to receive(:now).and_return(@start_time, @end_time)
   end
 
   context "when first created" do
 
     it "has no updated resources" do
-      @resource_reporter.should have(0).updated_resources
+      expect(@resource_reporter.updated_resources.size).to eq(0)
     end
 
     it "reports a successful run" do
-      @resource_reporter.status.should == "success"
+      expect(@resource_reporter.status).to eq("success")
     end
 
     it "assumes the resource history feature is supported" do
-      @resource_reporter.reporting_enabled?.should be_true
+      expect(@resource_reporter.reporting_enabled?).to be_truthy
     end
 
     it "should have no error_descriptions" do
-      @resource_reporter.error_descriptions.should eq({})
+      expect(@resource_reporter.error_descriptions).to eq({})
       # @resource_reporter.error_descriptions.should be_empty
       # @resource_reporter.should have(0).error_descriptions
     end
@@ -80,16 +82,16 @@ describe Chef::ResourceReporter do
     end
 
     it "reports a successful run" do
-      pending "refactor how node gets set."
-      @resource_reporter.status.should == "success"
+      skip "refactor how node gets set."
+      expect(@resource_reporter.status).to eq("success")
     end
   end
 
   context "when chef fails" do
     before do
-      @rest_client.stub!(:create_url).and_return("reports/nodes/spitfire/runs/#{@run_id}");
-      @rest_client.stub!(:raw_http_request).and_return({"result"=>"ok"});
-      @rest_client.stub!(:post_rest).and_return({"uri"=>"https://example.com/reports/nodes/spitfire/runs/#{@run_id}"});
+      allow(@rest_client).to receive(:create_url).and_return("reports/nodes/spitfire/runs/#{@run_id}");
+      allow(@rest_client).to receive(:raw_http_request).and_return({"result"=>"ok"});
+      allow(@rest_client).to receive(:post_rest).and_return({"uri"=>"https://example.com/reports/nodes/spitfire/runs/#{@run_id}"});
 
     end
 
@@ -101,11 +103,11 @@ describe Chef::ResourceReporter do
       end
 
       it "sets the run status to 'failure'" do
-        @resource_reporter.status.should == "failure"
+        expect(@resource_reporter.status).to eq("failure")
       end
 
       it "keeps the exception data" do
-        @resource_reporter.exception.should == @exception
+        expect(@resource_reporter.exception).to eq(@exception)
       end
     end
 
@@ -119,12 +121,12 @@ describe Chef::ResourceReporter do
       end
 
       it "collects the resource as an updated resource" do
-        @resource_reporter.should have(1).updated_resources
+        expect(@resource_reporter.updated_resources.size).to eq(1)
       end
 
       it "collects the desired state of the resource" do
         update_record = @resource_reporter.updated_resources.first
-        update_record.new_resource.should == @new_resource
+        expect(update_record.new_resource).to eq(@new_resource)
       end
     end
 
@@ -143,7 +145,7 @@ describe Chef::ResourceReporter do
         end
 
         it "has no updated resources" do
-          @resource_reporter.should have(0).updated_resources
+          expect(@resource_reporter.updated_resources.size).to eq(0)
         end
       end
 
@@ -156,17 +158,17 @@ describe Chef::ResourceReporter do
         end
 
         it "collects the updated resource" do
-          @resource_reporter.should have(1).updated_resources
+          expect(@resource_reporter.updated_resources.size).to eq(1)
         end
 
         it "collects the old state of the resource" do
           update_record = @resource_reporter.updated_resources.first
-          update_record.current_resource.should == @current_resource
+          expect(update_record.current_resource).to eq(@current_resource)
         end
 
         it "collects the new state of the resource" do
           update_record = @resource_reporter.updated_resources.first
-          update_record.new_resource.should == @new_resource
+          expect(update_record.new_resource).to eq(@new_resource)
         end
 
         context "and a subsequent resource fails before loading current resource" do
@@ -180,12 +182,12 @@ describe Chef::ResourceReporter do
 
           it "collects the desired state of the failed resource" do
             failed_resource_update = @resource_reporter.updated_resources.last
-            failed_resource_update.new_resource.should == @next_new_resource
+            expect(failed_resource_update.new_resource).to eq(@next_new_resource)
           end
 
           it "does not have the current state of the failed resource" do
             failed_resource_update = @resource_reporter.updated_resources.last
-            failed_resource_update.current_resource.should be_nil
+            expect(failed_resource_update.current_resource).to be_nil
           end
         end
       end
@@ -206,7 +208,7 @@ describe Chef::ResourceReporter do
       end
 
         it "does not collect data about the nested resource" do
-          @resource_reporter.should have(1).updated_resources
+          expect(@resource_reporter.updated_resources.size).to eq(1)
         end
       end
 
@@ -222,7 +224,7 @@ describe Chef::ResourceReporter do
         end
 
         it "does not collect data about the nested resource" do
-          @resource_reporter.should have(1).updated_resources
+          expect(@resource_reporter.updated_resources.size).to eq(1)
         end
       end
 
@@ -235,17 +237,17 @@ describe Chef::ResourceReporter do
         end
 
         it "collects the resource as an updated resource" do
-          @resource_reporter.should have(1).updated_resources
+          expect(@resource_reporter.updated_resources.size).to eq(1)
         end
 
         it "collects the desired state of the resource" do
           update_record = @resource_reporter.updated_resources.first
-          update_record.new_resource.should == @new_resource
+          expect(update_record.new_resource).to eq(@new_resource)
         end
 
         it "collects the current state of the resource" do
           update_record = @resource_reporter.updated_resources.first
-          update_record.current_resource.should == @current_resource
+          expect(update_record.current_resource).to eq(@current_resource)
         end
       end
 
@@ -255,14 +257,68 @@ describe Chef::ResourceReporter do
   describe "when generating a report for the server" do
 
     before do
-      @rest_client.stub!(:create_url).and_return("reports/nodes/spitfire/runs/#{@run_id}");
-      @rest_client.stub!(:raw_http_request).and_return({"result"=>"ok"});
-      @rest_client.stub!(:post_rest).and_return({"uri"=>"https://example.com/reports/nodes/spitfire/runs/#{@run_id}"});
+      allow(@rest_client).to receive(:create_url).and_return("reports/nodes/spitfire/runs/#{@run_id}");
+      allow(@rest_client).to receive(:raw_http_request).and_return({"result"=>"ok"});
+      allow(@rest_client).to receive(:post_rest).and_return({"uri"=>"https://example.com/reports/nodes/spitfire/runs/#{@run_id}"});
 
       @resource_reporter.run_started(@run_status)
     end
 
-    context "for a successful client run" do
+    context "when the new_resource does not have a string for name and identity" do
+      context "the new_resource name and id are nil" do
+        before do
+          @bad_resource = Chef::Resource::File.new("/tmp/nameless_file.txt")
+          allow(@bad_resource).to receive(:name).and_return(nil)
+          allow(@bad_resource).to receive(:identity).and_return(nil)
+          @resource_reporter.resource_action_start(@bad_resource, :create)
+          @resource_reporter.resource_current_state_loaded(@bad_resource, :create, @current_resource)
+          @resource_reporter.resource_updated(@bad_resource, :create)
+          @resource_reporter.resource_completed(@bad_resource)
+          @run_status.stop_clock
+          @report = @resource_reporter.prepare_run_data
+          @first_update_report = @report["resources"].first
+        end
+
+        it "resource_name in prepared_run_data is a string" do
+          expect(@first_update_report["name"].class).to eq(String)
+        end
+
+        it "resource_id in prepared_run_data is a string" do
+          expect(@first_update_report["id"].class).to eq(String)
+        end
+      end
+
+      context "the new_resource name and id are hashes" do
+        before do
+          @bad_resource = Chef::Resource::File.new("/tmp/filename_as_hash.txt")
+          allow(@bad_resource).to receive(:name).and_return({:foo=>:bar})
+          allow(@bad_resource).to receive(:identity).and_return({:foo=>:bar})
+          @resource_reporter.resource_action_start(@bad_resource, :create)
+          @resource_reporter.resource_current_state_loaded(@bad_resource, :create, @current_resource)
+          @resource_reporter.resource_updated(@bad_resource, :create)
+          @resource_reporter.resource_completed(@bad_resource)
+          @run_status.stop_clock
+          @report = @resource_reporter.prepare_run_data
+          @first_update_report = @report["resources"].first
+        end
+        # Ruby 1.8.7 flattens out hash to string using join instead of inspect, resulting in
+        # irb(main):001:0> {:foo => :bar}.to_s
+        # => "foobar"
+        # instead of the expected
+        # irb(main):001:0> {:foo => :bar}.to_s
+        # => "{:foo=>:bar}"
+        # Hence checking for the class instead of the actual value.
+        it "resource_name in prepared_run_data is a string" do
+          expect(@first_update_report["name"].class).to eq(String)
+        end
+
+        it "resource_id in prepared_run_data is a string" do
+          expect(@first_update_report["id"].class).to eq(String)
+        end
+      end
+    end
+
+    shared_examples_for "a successful client run" do
       before do
         # TODO: add inputs to generate expected output.
 
@@ -294,85 +350,110 @@ describe Chef::ResourceReporter do
         #    "status" : "success"
         #    "data" : ""
         # }
-        @resource_reporter.resource_action_start(@new_resource, :create)
-        @resource_reporter.resource_current_state_loaded(@new_resource, :create, @current_resource)
-        @resource_reporter.resource_updated(@new_resource, :create)
-        @resource_reporter.resource_completed(@new_resource)
+        @resource_reporter.resource_action_start(new_resource, :create)
+        @resource_reporter.resource_current_state_loaded(new_resource, :create, current_resource)
+        @resource_reporter.resource_updated(new_resource, :create)
+        @resource_reporter.resource_completed(new_resource)
         @run_status.stop_clock
         @report = @resource_reporter.prepare_run_data
         @first_update_report = @report["resources"].first
       end
 
       it "includes the run's status" do
-        @report.should have_key("status")
+        expect(@report).to have_key("status")
       end
 
       it "includes a list of updated resources" do
-        @report.should have_key("resources")
+        expect(@report).to have_key("resources")
       end
 
       it "includes an updated resource's type" do
-        @first_update_report.should have_key("type")
+        expect(@first_update_report).to have_key("type")
       end
 
       it "includes an updated resource's initial state" do
-        @first_update_report["before"].should == @current_resource.state
+        expect(@first_update_report["before"]).to eq(current_resource.state)
       end
 
       it "includes an updated resource's final state" do
-        @first_update_report["after"].should == @new_resource.state
+        expect(@first_update_report["after"]).to eq(new_resource.state)
       end
 
       it "includes the resource's name" do
-        @first_update_report["name"].should == @new_resource.name
+        expect(@first_update_report["name"]).to eq(new_resource.name)
       end
 
       it "includes the resource's id attribute" do
-        @first_update_report["id"].should == @new_resource.identity
+        expect(@first_update_report["id"]).to eq(new_resource.identity)
       end
 
       it "includes the elapsed time for the resource to converge" do
         # TODO: API takes integer number of milliseconds as a string. This
         # should be an int.
-        @first_update_report.should have_key("duration")
-        @first_update_report["duration"].to_i.should be_within(100).of(0)
+        expect(@first_update_report).to have_key("duration")
+        expect(@first_update_report["duration"].to_i).to be_within(100).of(0)
       end
 
       it "includes the action executed by the resource" do
         # TODO: rename as "action"
-        @first_update_report["result"].should == "create"
+        expect(@first_update_report["result"]).to eq("create")
       end
 
       it "includes the cookbook name of the resource" do
-        @first_update_report.should have_key("cookbook_name")
-        @first_update_report["cookbook_name"].should == "monkey"
+        expect(@first_update_report).to have_key("cookbook_name")
+        expect(@first_update_report["cookbook_name"]).to eq(@cookbook_name)
       end
 
       it "includes the cookbook version of the resource" do
-        @first_update_report.should have_key("cookbook_version")
-        @first_update_report["cookbook_version"].should == "1.2.3"
+        expect(@first_update_report).to have_key("cookbook_version")
+        expect(@first_update_report["cookbook_version"]).to eq("1.2.3")
       end
 
       it "includes the total resource count" do
-        @report.should have_key("total_res_count")
-        @report["total_res_count"].should == "1"
+        expect(@report).to have_key("total_res_count")
+        expect(@report["total_res_count"]).to eq("1")
       end
 
       it "includes the data hash" do
-        @report.should have_key("data")
-        @report["data"].should == {}
+        expect(@report).to have_key("data")
+        expect(@report["data"]).to eq({})
       end
 
       it "includes the run_list" do
-        @report.should have_key("run_list")
-        @report["run_list"].should == @run_status.node.run_list.to_json
+        expect(@report).to have_key("run_list")
+        expect(@report["run_list"]).to eq(Chef::JSONCompat.to_json(@run_status.node.run_list))
       end
 
       it "includes the end_time" do
-        @report.should have_key("end_time")
-        @report["end_time"].should == @run_status.end_time.to_s
+        expect(@report).to have_key("end_time")
+        expect(@report["end_time"]).to eq(@run_status.end_time.to_s)
       end
 
+    end
+
+    context "when the resource is a File" do
+      let(:new_resource) { @new_resource }
+      let(:current_resource) { @current_resource }
+
+      it_should_behave_like "a successful client run"
+    end
+
+    context "when the resource is a RegistryKey with binary data" do
+      let(:new_resource) do
+        resource = Chef::Resource::RegistryKey.new('Wubba\Lubba\Dub\Dubs')
+        resource.values([ { :name => 'rick', :type => :binary, :data => 255.chr * 1 } ])
+        allow(resource).to receive(:cookbook_name).and_return(@cookbook_name)
+        allow(resource).to receive(:cookbook_version).and_return(@cookbook_version)
+        resource
+      end
+
+      let(:current_resource) do
+        resource = Chef::Resource::RegistryKey.new('Wubba\Lubba\Dub\Dubs')
+        resource.values([ { :name => 'rick', :type => :binary, :data => 255.chr * 1 } ])
+        resource
+      end
+
+      it_should_behave_like "a successful client run"
     end
 
     context "for an unsuccessful run" do
@@ -381,34 +462,34 @@ describe Chef::ResourceReporter do
         @backtrace = ["foo.rb:1 in `foo!'","bar.rb:2 in `bar!","'baz.rb:3 in `baz!'"]
         @node = Chef::Node.new
         @node.name("spitfire")
-        @exception = mock("ArgumentError")
-        @exception.stub!(:inspect).and_return("Net::HTTPServerException")
-        @exception.stub!(:message).and_return("Object not found")
-        @exception.stub!(:backtrace).and_return(@backtrace)
+        @exception = ArgumentError.new
+        allow(@exception).to receive(:inspect).and_return("Net::HTTPServerException")
+        allow(@exception).to receive(:message).and_return("Object not found")
+        allow(@exception).to receive(:backtrace).and_return(@backtrace)
         @resource_reporter.run_list_expand_failed(@node, @exception)
         @resource_reporter.run_failed(@exception)
         @report = @resource_reporter.prepare_run_data
       end
 
       it "includes the exception type in the event data" do
-        @report.should have_key("data")
-        @report["data"]["exception"].should have_key("class")
-        @report["data"]["exception"]["class"].should == "Net::HTTPServerException"
+        expect(@report).to have_key("data")
+        expect(@report["data"]["exception"]).to have_key("class")
+        expect(@report["data"]["exception"]["class"]).to eq("Net::HTTPServerException")
       end
 
       it "includes the exception message in the event data" do
-        @report["data"]["exception"].should have_key("message")
-        @report["data"]["exception"]["message"].should == "Object not found"
+        expect(@report["data"]["exception"]).to have_key("message")
+        expect(@report["data"]["exception"]["message"]).to eq("Object not found")
       end
 
       it "includes the exception trace in the event data" do
-        @report["data"]["exception"].should have_key("backtrace")
-        @report["data"]["exception"]["backtrace"].should == @backtrace.to_json
+        expect(@report["data"]["exception"]).to have_key("backtrace")
+        expect(@report["data"]["exception"]["backtrace"]).to eq(Chef::JSONCompat.to_json(@backtrace))
       end
 
       it "includes the error inspector output in the event data" do
-        @report["data"]["exception"].should have_key("description")
-        @report["data"]["exception"]["description"].should include({"title"=>"Error expanding the run_list:", "sections"=>[{"Unexpected Error:" => "RSpec::Mocks::Mock: Object not found"}]})
+        expect(@report["data"]["exception"]).to have_key("description")
+        expect(@report["data"]["exception"]["description"]).to include({"title"=>"Error expanding the run_list:", "sections"=>[{"Unexpected Error:" => "ArgumentError: Object not found"}]})
       end
 
     end
@@ -428,39 +509,66 @@ describe Chef::ResourceReporter do
       end
 
       it "includes an updated resource's initial state" do
-        @first_update_report["before"].should == @current_resource.state
+        expect(@first_update_report["before"]).to eq(@current_resource.state)
       end
 
       it "includes an updated resource's final state" do
-        @first_update_report["after"].should == @new_resource.state
+        expect(@first_update_report["after"]).to eq(@new_resource.state)
       end
 
       it "includes the resource's name" do
-        @first_update_report["name"].should == @new_resource.name
+        expect(@first_update_report["name"]).to eq(@new_resource.name)
       end
 
       it "includes the resource's id attribute" do
-        @first_update_report["id"].should == @new_resource.identity
+        expect(@first_update_report["id"]).to eq(@new_resource.identity)
       end
 
       it "includes the elapsed time for the resource to converge" do
         # TODO: API takes integer number of milliseconds as a string. This
         # should be an int.
-        @first_update_report.should have_key("duration")
-        @first_update_report["duration"].to_i.should be_within(100).of(0)
+        expect(@first_update_report).to have_key("duration")
+        expect(@first_update_report["duration"].to_i).to be_within(100).of(0)
       end
 
       it "includes the action executed by the resource" do
         # TODO: rename as "action"
-        @first_update_report["result"].should == "create"
+        expect(@first_update_report["result"]).to eq("create")
       end
 
       it "does not include a cookbook name for the resource" do
-        @first_update_report.should_not have_key("cookbook_name")
+        expect(@first_update_report).not_to have_key("cookbook_name")
       end
 
       it "does not include a cookbook version for the resource" do
-        @first_update_report.should_not have_key("cookbook_version")
+        expect(@first_update_report).not_to have_key("cookbook_version")
+      end
+    end
+
+    context "when including a resource that overrides Resource#state" do
+      before do
+        @current_state_resource = Chef::Resource::WithState.new("Stateful", @run_context)
+        @current_state_resource.state = nil
+
+        @new_state_resource = Chef::Resource::WithState.new("Stateful", @run_context)
+        @new_state_resource.state = "Running"
+        @resource_reporter.resource_action_start(@new_state_resource, :create)
+        @resource_reporter.resource_current_state_loaded(@new_state_resource, :create, @current_state_resource)
+        @resource_reporter.resource_updated(@new_state_resource, :create)
+        @resource_reporter.resource_completed(@new_state_resource)
+        @run_status.stop_clock
+        @report = @resource_reporter.prepare_run_data
+        @first_update_report = @report["resources"].first
+      end
+
+      it "sets before to {} instead of nil" do
+        expect(@first_update_report).to have_key("before")
+        expect(@first_update_report['before']).to eq({})
+      end
+
+      it "sets after to {} instead of 'Running'" do
+        expect(@first_update_report).to have_key("after")
+        expect(@first_update_report['after']).to eq({})
       end
     end
 
@@ -477,7 +585,7 @@ describe Chef::ResourceReporter do
         # 404 getting the run_id
         @response = Net::HTTPNotFound.new("a response body", "404", "Not Found")
         @error = Net::HTTPServerException.new("404 message", @response)
-        @rest_client.should_receive(:post_rest).
+        expect(@rest_client).to receive(:post_rest).
           with("reports/nodes/spitfire/runs", {:action => :start, :run_id => @run_id,
                                                :start_time => @start_time.to_s},
                {'X-Ops-Reporting-Protocol-Version' => Chef::ResourceReporter::PROTOCOL_VERSION}).
@@ -486,17 +594,17 @@ describe Chef::ResourceReporter do
 
       it "assumes the feature is not enabled" do
         @resource_reporter.run_started(@run_status)
-        @resource_reporter.reporting_enabled?.should be_false
+        expect(@resource_reporter.reporting_enabled?).to be_falsey
       end
 
       it "does not send a resource report to the server" do
         @resource_reporter.run_started(@run_status)
-        @rest_client.should_not_receive(:post_rest)
+        expect(@rest_client).not_to receive(:post_rest)
         @resource_reporter.run_completed(@node)
       end
 
       it "prints an error about the 404" do
-        Chef::Log.should_receive(:debug).with(/404/)
+        expect(Chef::Log).to receive(:debug).with(/404/)
         @resource_reporter.run_started(@run_status)
       end
 
@@ -507,7 +615,7 @@ describe Chef::ResourceReporter do
         # 500 getting the run_id
         @response = Net::HTTPInternalServerError.new("a response body", "500", "Internal Server Error")
         @error = Net::HTTPServerException.new("500 message", @response)
-        @rest_client.should_receive(:post_rest).
+        expect(@rest_client).to receive(:post_rest).
           with("reports/nodes/spitfire/runs", {:action => :start, :run_id => @run_id, :start_time => @start_time.to_s},
                {'X-Ops-Reporting-Protocol-Version' => Chef::ResourceReporter::PROTOCOL_VERSION}).
           and_raise(@error)
@@ -515,17 +623,17 @@ describe Chef::ResourceReporter do
 
       it "assumes the feature is not enabled" do
         @resource_reporter.run_started(@run_status)
-        @resource_reporter.reporting_enabled?.should be_false
+        expect(@resource_reporter.reporting_enabled?).to be_falsey
       end
 
       it "does not send a resource report to the server" do
         @resource_reporter.run_started(@run_status)
-        @rest_client.should_not_receive(:post_rest)
+        expect(@rest_client).not_to receive(:post_rest)
         @resource_reporter.run_completed(@node)
       end
 
       it "prints an error about the error" do
-        Chef::Log.should_receive(:info).with(/500/)
+        expect(Chef::Log).to receive(:info).with(/500/)
         @resource_reporter.run_started(@run_status)
       end
     end
@@ -537,7 +645,7 @@ describe Chef::ResourceReporter do
         # 500 getting the run_id
         @response = Net::HTTPInternalServerError.new("a response body", "500", "Internal Server Error")
         @error = Net::HTTPServerException.new("500 message", @response)
-        @rest_client.should_receive(:post_rest).
+        expect(@rest_client).to receive(:post_rest).
           with("reports/nodes/spitfire/runs", {:action => :start, :run_id => @run_id, :start_time => @start_time.to_s},
                {'X-Ops-Reporting-Protocol-Version' => Chef::ResourceReporter::PROTOCOL_VERSION}).
           and_raise(@error)
@@ -548,17 +656,17 @@ describe Chef::ResourceReporter do
       end
 
       it "fails the run and prints an message about the error" do
-        Chef::Log.should_receive(:error).with(/500/)
-        lambda {
+        expect(Chef::Log).to receive(:error).with(/500/)
+        expect {
           @resource_reporter.run_started(@run_status)
-        }.should raise_error(Net::HTTPServerException)
+        }.to raise_error(Net::HTTPServerException)
       end
     end
 
     context "after creating the run history document" do
       before do
         response = {"uri"=>"https://example.com/reports/nodes/spitfire/runs/@run_id"}
-        @rest_client.should_receive(:post_rest).
+        expect(@rest_client).to receive(:post_rest).
           with("reports/nodes/spitfire/runs", {:action => :start, :run_id => @run_id, :start_time => @start_time.to_s},
                {'X-Ops-Reporting-Protocol-Version' => Chef::ResourceReporter::PROTOCOL_VERSION}).
           and_return(response)
@@ -566,7 +674,7 @@ describe Chef::ResourceReporter do
       end
 
       it "creates a run document on the server at the start of the run" do
-        @resource_reporter.run_id.should == @run_id
+        expect(@resource_reporter.run_id).to eq(@run_id)
       end
 
       it "updates the run document with resource updates at the end of the run" do
@@ -575,29 +683,76 @@ describe Chef::ResourceReporter do
         @resource_reporter.resource_current_state_loaded(@new_resource, :create, @current_resource)
         @resource_reporter.resource_updated(@new_resource, :create)
 
-        @resource_reporter.stub!(:end_time).and_return(@end_time)
+        allow(@resource_reporter).to receive(:end_time).and_return(@end_time)
         @expected_data = @resource_reporter.prepare_run_data
 
         post_url = "https://chef_server/example_url"
         response = {"result"=>"ok"}
 
-        @rest_client.should_receive(:create_url).
+        expect(@rest_client).to receive(:create_url).
           with("reports/nodes/spitfire/runs/#{@run_id}").
           ordered.
           and_return(post_url)
-        @rest_client.should_receive(:raw_http_request).ordered do |method, url, headers, data|
-          method.should eq(:POST)
-          url.should eq(post_url)
-          headers.should eq({'Content-Encoding' => 'gzip',
+        expect(@rest_client).to receive(:raw_http_request).ordered do |method, url, headers, data|
+          expect(method).to eq(:POST)
+          expect(url).to eq(post_url)
+          expect(headers).to eq({'Content-Encoding' => 'gzip',
                              'X-Ops-Reporting-Protocol-Version' => Chef::ResourceReporter::PROTOCOL_VERSION
           })
           data_stream = Zlib::GzipReader.new(StringIO.new(data))
           data = data_stream.read
-          data.should eq(@expected_data.to_json)
+          expect(data).to eq(Chef::JSONCompat.to_json(@expected_data))
           response
         end
 
         @resource_reporter.run_completed(@node)
+      end
+    end
+
+    context "when data report post is enabled and the server response fails" do
+      before do
+        @enable_reporting_url_fatals = Chef::Config[:enable_reporting_url_fatals]
+        Chef::Config[:enable_reporting_url_fatals] = true
+        # this call doesn't matter for this context
+        allow(@rest_client).to receive(:create_url)
+      end
+
+      after do
+        Chef::Config[:enable_reporting_url_fatals] = @enable_reporting_url_fatals
+      end
+
+      it "should log 4xx errors" do
+        response = Net::HTTPClientError.new("forbidden", "403", "Forbidden")
+        error = Net::HTTPServerException.new("403 message", response)
+        allow(@rest_client).to receive(:raw_http_request).and_raise(error)
+        expect(Chef::Log).to receive(:error).with(/403/)
+
+        @resource_reporter.post_reporting_data
+      end
+
+      it "should log error 5xx errors" do
+        response = Net::HTTPServerError.new("internal error", "500", "Internal Server Error")
+        error = Net::HTTPFatalError.new("500 message", response)
+        allow(@rest_client).to receive(:raw_http_request).and_raise(error)
+        expect(Chef::Log).to receive(:error).with(/500/)
+
+        @resource_reporter.post_reporting_data
+      end
+
+      it "should log if a socket error happens" do
+        allow(@rest_client).to receive(:raw_http_request).and_raise(SocketError.new("test socket error"))
+        expect(Chef::Log).to receive(:error).with(/test socket error/)
+
+        @resource_reporter.post_reporting_data
+
+      end
+
+      it "should raise if an unkwown error happens" do
+        allow(@rest_client).to receive(:raw_http_request).and_raise(Exception.new)
+
+        expect {
+          @resource_reporter.post_reporting_data
+        }.to raise_error(Exception)
       end
     end
   end

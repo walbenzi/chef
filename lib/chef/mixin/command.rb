@@ -24,6 +24,26 @@ require 'etc'
 
 class Chef
   module Mixin
+
+    #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # NOTE:
+    # The popen4 method upon which all the code here is based has a race
+    # condition where it may fail to read all of the data written to stdout and
+    # stderr after the child process exits. The tests for the code here
+    # occasionally fail because of this race condition, so they have been
+    # tagged "volatile".
+    #
+    # This code is considered deprecated, so it should not need to be modified
+    # frequently, if at all. HOWEVER, if you do modify the code here, you must
+    # explicitly enable volatile tests:
+    #
+    #   bundle exec rspec spec/unit/mixin/command_spec.rb -t volatile
+    #
+    # In addition, you should make a note that tests need to be run with
+    # volatile tests enabled on any pull request or bug report you submit with
+    # your patch.
+    #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
     module Command
       extend self
 
@@ -124,19 +144,18 @@ class Chef
       end
 
       def handle_command_failures(status, command_output, opts={})
-        unless opts[:ignore_failure]
-          opts[:returns] ||= 0
-          unless Array(opts[:returns]).include?(status.exitstatus)
-            # if the log level is not debug, through output of command when we fail
-            output = ""
-            if Chef::Log.level == :debug || opts[:output_on_failure]
-              output << "\n---- Begin output of #{opts[:command]} ----\n"
-              output << command_output.to_s
-              output << "\n---- End output of #{opts[:command]} ----\n"
-            end
-            raise Chef::Exceptions::Exec, "#{opts[:command]} returned #{status.exitstatus}, expected #{opts[:returns]}#{output}"
-          end
+        return if opts[:ignore_failure]
+        opts[:returns] ||= 0
+        return if Array(opts[:returns]).include?(status.exitstatus)
+
+        # if the log level is not debug, through output of command when we fail
+        output = ""
+        if Chef::Log.level == :debug || opts[:output_on_failure]
+          output << "\n---- Begin output of #{opts[:command]} ----\n"
+          output << command_output.to_s
+          output << "\n---- End output of #{opts[:command]} ----\n"
         end
+        raise Chef::Exceptions::Exec, "#{opts[:command]} returned #{status.exitstatus}, expected #{opts[:returns]}#{output}"
       end
 
       # Call #run_command but set LC_ALL to the system's current environment so it doesn't get changed to C.

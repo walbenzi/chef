@@ -17,15 +17,12 @@
 #
 
 require 'pathname'
-require 'chef/mixin/shell_out'
 require 'chef/provider/user'
 
 class Chef
   class Provider
     class User
       class Useradd < Chef::Provider::User
-
-        include Chef::Mixin::ShellOut
 
         UNIVERSAL_OPTIONS = [[:comment, "-c"], [:gid, "-g"], [:password, "-p"], [:shell, "-s"], [:uid, "-u"]]
 
@@ -38,7 +35,7 @@ class Chef
         end
 
         def manage_user
-          if universal_options != ""
+          unless universal_options.empty?
             command = compile_command("usermod") do |u|
               u.concat(universal_options)
             end
@@ -49,6 +46,7 @@ class Chef
         def remove_user
           command = [ "userdel" ]
           command << "-r" if managing_home_dir?
+          command << "-f" if new_resource.force
           command << new_resource.username
           shell_out!(*command)
         end
@@ -57,6 +55,13 @@ class Chef
           # we can get an exit code of 1 even when it's successful on
           # rhel/centos (redhat bug 578534). See additional error checks below.
           passwd_s = shell_out!("passwd", "-S", new_resource.username, :returns => [0,1])
+          if whyrun_mode? && passwd_s.stdout.empty? && passwd_s.stderr.match(/does not exist/)
+            # if we're in whyrun mode and the user is not yet created we assume it would be
+            return false
+          end
+
+          raise Chef::Exceptions::User, "Cannot determine if #{@new_resource} is locked!" if passwd_s.stdout.empty?
+
           status_line = passwd_s.stdout.split(' ')
           case status_line[1]
           when /^P/

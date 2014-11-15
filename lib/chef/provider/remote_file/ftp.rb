@@ -81,7 +81,6 @@ class Chef
           @filename
         end
 
-
         def fetch
           with_connection do
             get
@@ -143,6 +142,7 @@ class Chef
             ftp.voidcmd("TYPE #{typecode.upcase}")
           end
           ftp.getbinaryfile(filename, tempfile.path)
+          tempfile.close if tempfile
           tempfile
         end
 

@@ -105,7 +105,7 @@ describe Shell do
 
     it "boots correctly with -lauto" do
       output, exitstatus = run_chef_shell_with("-lauto")
-      output.should include("done")
+      expect(output).to include("done")
       expect(exitstatus).to eq(0)
     end
 
@@ -115,7 +115,17 @@ describe Shell do
         keyboard.puts(show_log_level_code)
         read_until(out, show_log_level_code)
       end
-      output.should include("===fatal===")
+      expect(output).to include("===fatal===")
+      expect(exitstatus).to eq(0)
+    end
+
+    it "sets the override_runlist from the command line" do
+      output, exitstatus = run_chef_shell_with("-o 'override::foo,override::bar'") do |out, keyboard|
+        show_recipes_code = %q[puts "#{node.recipes.inspect}"]
+        keyboard.puts(show_recipes_code)
+        read_until(out, show_recipes_code)
+      end
+      expect(output).to include(%q{["override::foo", "override::bar"]})
       expect(exitstatus).to eq(0)
     end
   end

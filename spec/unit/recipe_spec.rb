@@ -22,109 +22,288 @@
 require 'spec_helper'
 
 describe Chef::Recipe do
-  before(:each) do
-    @cookbook_repo = File.expand_path(File.join(File.dirname(__FILE__), "..", "data", "cookbooks"))
-    cl = Chef::CookbookLoader.new(@cookbook_repo)
-    cl.load_cookbooks
-    @cookbook_collection = Chef::CookbookCollection.new(cl)
-    @node = Chef::Node.new
-    @node.normal[:tags] = Array.new
-    @events = Chef::EventDispatch::Dispatcher.new
-    @run_context = Chef::RunContext.new(@node, @cookbook_collection, @events)
-    @recipe = Chef::Recipe.new("hjk", "test", @run_context)
 
-    # Shell/ext.rb is on the run path, and it defines
-    # Chef::Recipe#resources to call pp, which we don't want when
-    # we're running tests.
-    @recipe.stub!(:pp)
+  let(:cookbook_repo) { File.expand_path(File.join(File.dirname(__FILE__), "..", "data", "cookbooks")) }
+
+  let(:cookbook_loader) do
+    loader = Chef::CookbookLoader.new(cookbook_repo)
+    loader.load_cookbooks
+    loader
+  end
+
+  let(:cookbook_collection) { Chef::CookbookCollection.new(cookbook_loader) }
+
+  let(:node) do
+    Chef::Node.new.tap {|n| n.normal[:tags] = [] }
+  end
+
+  let(:events) do
+    Chef::EventDispatch::Dispatcher.new
+  end
+
+  let(:run_context) do
+    Chef::RunContext.new(node, cookbook_collection, events)
+  end
+
+  let(:recipe) do
+    Chef::Recipe.new("hjk", "test", run_context)
   end
 
   describe "method_missing" do
     describe "resources" do
       it "should load a two word (zen_master) resource" do
-        lambda do
-          @recipe.zen_master "monkey" do
+        expect do
+          recipe.zen_master "monkey" do
             peace true
           end
-        end.should_not raise_error(ArgumentError)
+        end.not_to raise_error
       end
 
       it "should load a one word (cat) resource" do
-        lambda do
-          @recipe.cat "loulou" do
+        expect do
+          recipe.cat "loulou" do
             pretty_kitty true
           end
-        end.should_not raise_error(ArgumentError)
+        end.not_to raise_error
       end
 
       it "should load a four word (one_two_three_four) resource" do
-        lambda do
-          @recipe.one_two_three_four "numbers" do
+        expect do
+          recipe.one_two_three_four "numbers" do
             i_can_count true
           end
-        end.should_not raise_error(ArgumentError)
+        end.not_to raise_error
       end
 
       it "should throw an error if you access a resource that we can't find" do
-        lambda { @recipe.not_home("not_home_resource") }.should raise_error(NameError)
+        expect { recipe.not_home("not_home_resource") }.to raise_error(NameError)
       end
 
       it "should require a name argument" do
-        lambda {
-          @recipe.cat
-        }.should raise_error(ArgumentError, "You must supply a name when declaring a cat resource")
+        expect {
+          recipe.cat
+        }.to raise_error(ArgumentError, "You must supply a name when declaring a cat resource")
       end
 
       it "should allow regular errors (not NameErrors) to pass unchanged" do
-        lambda {
-          @recipe.cat("felix") { raise ArgumentError, "You Suck" }
-        }.should raise_error(ArgumentError)
+        expect {
+          recipe.cat("felix") { raise ArgumentError, "You Suck" }
+        }.to raise_error(ArgumentError)
       end
 
       it "should add our zen_master to the collection" do
-        @recipe.zen_master "monkey" do
+        recipe.zen_master "monkey" do
           peace true
         end
-        @run_context.resource_collection.lookup("zen_master[monkey]").name.should eql("monkey")
+        expect(run_context.resource_collection.lookup("zen_master[monkey]").name).to eql("monkey")
       end
 
       it "should add our zen masters to the collection in the order they appear" do
         %w{monkey dog cat}.each do |name|
-          @recipe.zen_master name do
+          recipe.zen_master name do
             peace true
           end
         end
 
-        @run_context.resource_collection.map{|r| r.name}.should eql(["monkey", "dog", "cat"])
+        expect(run_context.resource_collection.map{|r| r.name}).to eql(["monkey", "dog", "cat"])
       end
 
       it "should return the new resource after creating it" do
-        res = @recipe.zen_master "makoto" do
+        res = recipe.zen_master "makoto" do
           peace true
         end
-        res.resource_name.should eql(:zen_master)
-        res.name.should eql("makoto")
+        expect(res.resource_name).to eql(:zen_master)
+        expect(res.name).to eql("makoto")
       end
 
       describe "should locate platform mapped resources" do
 
         it "locate resource for particular platform" do
-          Object.const_set('ShaunTheSheep', Class.new(Chef::Resource){ provides :laughter, :on_platforms => ["television"] })
-          @node.automatic[:platform] = "television"
-          @node.automatic[:platform_version] = "123"
-          res = @recipe.laughter "timmy"
-          res.name.should eql("timmy")
+          ShaunTheSheep = Class.new(Chef::Resource)
+          ShaunTheSheep.provides :laughter, :on_platforms => ["television"]
+          node.automatic[:platform] = "television"
+          node.automatic[:platform_version] = "123"
+          res = recipe.laughter "timmy"
+          expect(res.name).to eql("timmy")
           res.kind_of?(ShaunTheSheep)
         end
 
         it "locate a resource for all platforms" do
-          Object.const_set("YourMom", Class.new(Chef::Resource){ provides :love_and_caring })
-          res = @recipe.love_and_caring "mommy"
-          res.name.should eql("mommy")
+          YourMom = Class.new(Chef::Resource)
+          YourMom.provides :love_and_caring
+          res = recipe.love_and_caring "mommy"
+          expect(res.name).to eql("mommy")
           res.kind_of?(YourMom)
         end
 
       end
+    end
+
+    describe "creating resources via build_resource" do
+      let(:zm_resource) do
+        recipe.build_resource(:zen_master, "klopp") do
+          something "bvb"
+        end
+      end
+
+      it "applies attributes from the block to the resource" do
+        expect(zm_resource.something).to eq("bvb")
+      end
+
+      it "sets contextual attributes on the resource" do
+        expect(zm_resource.recipe_name).to eq("test")
+        expect(zm_resource.cookbook_name).to eq("hjk")
+        expect(zm_resource.source_line).to include(__FILE__)
+      end
+
+      it "does not add the resource to the resource collection" do
+        zm_resource # force let binding evaluation
+        expect { run_context.resource_collection.resources(:zen_master => "klopp") }.to raise_error(Chef::Exceptions::ResourceNotFound)
+      end
+
+    end
+
+    describe "creating resources via declare_resource" do
+      let(:zm_resource) do
+        recipe.declare_resource(:zen_master, "klopp") do
+          something "bvb"
+        end
+      end
+
+      it "applies attributes from the block to the resource" do
+        expect(zm_resource.something).to eq("bvb")
+      end
+
+      it "sets contextual attributes on the resource" do
+        expect(zm_resource.recipe_name).to eq("test")
+        expect(zm_resource.cookbook_name).to eq("hjk")
+        expect(zm_resource.source_line).to include(__FILE__)
+      end
+
+      it "adds the resource to the resource collection" do
+        zm_resource # force let binding evaluation
+        expect(run_context.resource_collection.resources(:zen_master => "klopp")).to eq(zm_resource)
+      end
+    end
+
+    describe "creating a resource with short name" do
+      # zen_follower resource has this:
+      # provides :follower, :on_platforms => ["zen"]
+      before do
+        node.automatic_attrs[:platform] = "zen"
+      end
+
+      let(:resource_follower) do
+        recipe.declare_resource(:follower, "srst") do
+          master "none"
+        end
+      end
+
+      it "defines the resource using the declaration name with short name" do
+        resource_follower
+        expect(run_context.resource_collection.lookup("follower[srst]")).not_to be_nil
+      end
+    end
+
+    describe "creating a resource with a long name" do
+      let(:resource_zn_follower) do
+        recipe.declare_resource(:zen_follower, "srst") do
+          master "none"
+        end
+      end
+
+
+      it "defines the resource using the declaration name with long name" do
+        resource_zn_follower
+        expect(run_context.resource_collection.lookup("zen_follower[srst]")).not_to be_nil
+      end
+    end
+
+    describe "when attempting to create a resource of an invalid type" do
+
+      it "gives a sane error message when using method_missing" do
+        expect do
+          recipe.no_such_resource("foo")
+        end.to raise_error(NoMethodError, %q[No resource or method named `no_such_resource' for `Chef::Recipe "test"'])
+      end
+
+      it "gives a sane error message when using method_missing 'bare'" do
+        expect do
+          recipe.instance_eval do
+            # Giving an argument will change this from NameError to NoMethodError
+            no_such_resource
+          end
+        end.to raise_error(NameError, %q[No resource, method, or local variable named `no_such_resource' for `Chef::Recipe "test"'])
+      end
+
+      it "gives a sane error message when using build_resource" do
+        expect { recipe.build_resource(:no_such_resource, "foo") }.to raise_error(Chef::Exceptions::NoSuchResourceType)
+      end
+
+      it "gives a sane error message when using declare_resource" do
+        expect { recipe.declare_resource(:no_such_resource, "bar") }.to raise_error(Chef::Exceptions::NoSuchResourceType)
+      end
+
+    end
+
+    describe "when creating a resource that contains an error in the attributes block" do
+
+      it "does not obfuscate the error source" do
+        expect do
+          recipe.zen_master("klopp") do
+            this_method_doesnt_exist
+          end
+        end.to raise_error(NoMethodError, "undefined method `this_method_doesnt_exist' for Chef::Resource::ZenMaster")
+
+      end
+
+    end
+
+    describe "resource cloning" do
+
+      let(:second_recipe) do
+        Chef::Recipe.new("second_cb", "second_recipe", run_context)
+      end
+
+      let(:original_resource) do
+        recipe.zen_master("klopp") do
+          something "bvb09"
+          action :score
+        end
+      end
+
+      let(:duplicated_resource) do
+        original_resource
+        second_recipe.zen_master("klopp") do
+          # attrs should be cloned
+        end
+      end
+
+      it "copies attributes from the first resource" do
+        expect(duplicated_resource.something).to eq("bvb09")
+      end
+
+      it "does not copy the action from the first resource" do
+        expect(original_resource.action).to eq([:score])
+        expect(duplicated_resource.action).to eq(:nothing)
+      end
+
+      it "does not copy the source location of the first resource" do
+        # sanity check source location:
+        expect(original_resource.source_line).to include(__FILE__)
+        expect(duplicated_resource.source_line).to include(__FILE__)
+        # actual test:
+        expect(original_resource.source_line).not_to eq(duplicated_resource.source_line)
+      end
+
+      it "sets the cookbook name on the cloned resource to that resource's cookbook" do
+        expect(duplicated_resource.cookbook_name).to eq("second_cb")
+      end
+
+      it "sets the recipe name on the cloned resource to that resoure's recipe" do
+        expect(duplicated_resource.recipe_name).to eq("second_recipe")
+      end
+
     end
 
     describe "resource definitions" do
@@ -136,12 +315,12 @@ describe Chef::Recipe do
             something params[:something]
           end
         end
-        @run_context.definitions[:crow] = crow_define
-        @recipe.crow "mine" do
+        run_context.definitions[:crow] = crow_define
+        recipe.crow "mine" do
           peace true
         end
-        @run_context.resource_collection.resources(:zen_master => "lao tzu").name.should eql("lao tzu")
-        @run_context.resource_collection.resources(:zen_master => "lao tzu").something.should eql(true)
+        expect(run_context.resource_collection.resources(:zen_master => "lao tzu").name).to eql("lao tzu")
+        expect(run_context.resource_collection.resources(:zen_master => "lao tzu").something).to eql(true)
       end
 
       it "should set the node on defined resources" do
@@ -152,12 +331,24 @@ describe Chef::Recipe do
             something params[:something]
           end
         end
-        @run_context.definitions[:crow] = crow_define
-        @node.normal[:foo] = false
-        @recipe.crow "mine" do
+        run_context.definitions[:crow] = crow_define
+        node.normal[:foo] = false
+        recipe.crow "mine" do
           something node[:foo]
         end
-        @recipe.resources(:zen_master => "lao tzu").something.should eql(false)
+        expect(recipe.resources(:zen_master => "lao tzu").something).to eql(false)
+      end
+
+      it "should return the last statement in the definition as the retval" do
+        crow_define = Chef::ResourceDefinition.new
+        crow_define.define :crow, :peace => false, :something => true do
+          "the return val"
+        end
+        run_context.definitions[:crow] = crow_define
+        crow_block = recipe.crow "mine" do
+          peace true
+        end
+        expect(crow_block).to eql("the return val")
       end
     end
 
@@ -170,101 +361,126 @@ describe Chef::Recipe do
     peace = true
   end
   CODE
-      lambda { @recipe.instance_eval(code) }.should_not raise_error
-      @recipe.resources(:zen_master => "gnome").name.should eql("gnome")
+      expect { recipe.instance_eval(code) }.not_to raise_error
+      expect(recipe.resources(:zen_master => "gnome").name).to eql("gnome")
+    end
+  end
+
+  describe "handle exec calls" do
+    it "should raise ResourceNotFound error if exec is used" do
+      code = <<-CODE
+      exec 'do_not_try_to_exec'
+      CODE
+      expect { recipe.instance_eval(code) }.to raise_error(Chef::Exceptions::ResourceNotFound)
     end
   end
 
   describe "from_file" do
     it "should load a resource from a ruby file" do
-      @recipe.from_file(File.join(CHEF_SPEC_DATA, "recipes", "test.rb"))
-      res = @recipe.resources(:file => "/etc/nsswitch.conf")
-      res.name.should eql("/etc/nsswitch.conf")
-      res.action.should eql([:create])
-      res.owner.should eql("root")
-      res.group.should eql("root")
-      res.mode.should eql(0644)
+      recipe.from_file(File.join(CHEF_SPEC_DATA, "recipes", "test.rb"))
+      res = recipe.resources(:file => "/etc/nsswitch.conf")
+      expect(res.name).to eql("/etc/nsswitch.conf")
+      expect(res.action).to eql([:create])
+      expect(res.owner).to eql("root")
+      expect(res.group).to eql("root")
+      expect(res.mode).to eql(0644)
     end
 
     it "should raise an exception if the file cannot be found or read" do
-      lambda { @recipe.from_file("/tmp/monkeydiving") }.should raise_error(IOError)
+      expect { recipe.from_file("/tmp/monkeydiving") }.to raise_error(IOError)
     end
   end
 
   describe "include_recipe" do
     it "should evaluate another recipe with include_recipe" do
-      @run_context.include_recipe "openldap::gigantor"
-      res = @run_context.resource_collection.resources(:cat => "blanket")
-      res.name.should eql("blanket")
-      res.pretty_kitty.should eql(false)
+      expect(node).to receive(:loaded_recipe).with(:openldap, "gigantor")
+      allow(run_context).to receive(:unreachable_cookbook?).with(:openldap).and_return(false)
+      run_context.include_recipe "openldap::gigantor"
+      res = run_context.resource_collection.resources(:cat => "blanket")
+      expect(res.name).to eql("blanket")
+      expect(res.pretty_kitty).to eql(false)
     end
 
     it "should load the default recipe for a cookbook if include_recipe is called without a ::" do
-      @run_context.include_recipe "openldap"
-      res = @run_context.resource_collection.resources(:cat => "blanket")
-      res.name.should eql("blanket")
-      res.pretty_kitty.should eql(true)
+      expect(node).to receive(:loaded_recipe).with(:openldap, "default")
+      allow(run_context).to receive(:unreachable_cookbook?).with(:openldap).and_return(false)
+      run_context.include_recipe "openldap"
+      res = run_context.resource_collection.resources(:cat => "blanket")
+      expect(res.name).to eql("blanket")
+      expect(res.pretty_kitty).to eql(true)
     end
 
     it "should store that it has seen a recipe in the run_context" do
-      @run_context.include_recipe "openldap"
-      @run_context.loaded_recipe?("openldap").should be_true
+      expect(node).to receive(:loaded_recipe).with(:openldap, "default")
+      allow(run_context).to receive(:unreachable_cookbook?).with(:openldap).and_return(false)
+      run_context.include_recipe "openldap"
+      expect(run_context.loaded_recipe?("openldap")).to be_truthy
     end
 
     it "should not include the same recipe twice" do
-      @cookbook_collection[:openldap].should_receive(:load_recipe).with("default", @run_context)
-      @recipe.include_recipe "openldap"
-      @cookbook_collection[:openldap].should_not_receive(:load_recipe).with("default", @run_context)
-      @recipe.include_recipe "openldap"
+      expect(node).to receive(:loaded_recipe).with(:openldap, "default").exactly(:once)
+      allow(run_context).to receive(:unreachable_cookbook?).with(:openldap).and_return(false)
+      expect(cookbook_collection[:openldap]).to receive(:load_recipe).with("default", run_context)
+      recipe.include_recipe "openldap"
+      expect(cookbook_collection[:openldap]).not_to receive(:load_recipe).with("default", run_context)
+      recipe.include_recipe "openldap"
     end
   end
 
   describe "tags" do
+    describe "with the default node object" do
+      let(:node) { Chef::Node.new }
+
+      it "should return false for any tags" do
+        expect(recipe.tagged?("foo")).to be(false)
+      end
+    end
+
     it "should set tags via tag" do
-      @recipe.tag "foo"
-      @node[:tags].should include("foo")
+      recipe.tag "foo"
+      expect(node[:tags]).to include("foo")
     end
 
     it "should set multiple tags via tag" do
-      @recipe.tag "foo", "bar"
-      @node[:tags].should include("foo")
-      @node[:tags].should include("bar")
+      recipe.tag "foo", "bar"
+      expect(node[:tags]).to include("foo")
+      expect(node[:tags]).to include("bar")
     end
 
     it "should not set the same tag twice via tag" do
-      @recipe.tag "foo"
-      @recipe.tag "foo"
-      @node[:tags].should eql([ "foo" ])
+      recipe.tag "foo"
+      recipe.tag "foo"
+      expect(node[:tags]).to eql([ "foo" ])
     end
 
     it "should return the current list of tags from tag with no arguments" do
-      @recipe.tag "foo"
-      @recipe.tag.should eql([ "foo" ])
+      recipe.tag "foo"
+      expect(recipe.tag).to eql([ "foo" ])
     end
 
     it "should return true from tagged? if node is tagged" do
-      @recipe.tag "foo"
-      @recipe.tagged?("foo").should be(true)
+      recipe.tag "foo"
+      expect(recipe.tagged?("foo")).to be(true)
     end
 
     it "should return false from tagged? if node is not tagged" do
-      @recipe.tagged?("foo").should be(false)
+      expect(recipe.tagged?("foo")).to be(false)
     end
 
     it "should return false from tagged? if node is not tagged" do
-      @recipe.tagged?("foo").should be(false)
+      expect(recipe.tagged?("foo")).to be(false)
     end
 
     it "should remove a tag from the tag list via untag" do
-      @recipe.tag "foo"
-      @recipe.untag "foo"
-      @node[:tags].should eql([])
+      recipe.tag "foo"
+      recipe.untag "foo"
+      expect(node[:tags]).to eql([])
     end
 
     it "should remove multiple tags from the tag list via untag" do
-      @recipe.tag "foo", "bar"
-      @recipe.untag "bar", "foo"
-      @node[:tags].should eql([])
+      recipe.tag "foo", "bar"
+      recipe.untag "bar", "foo"
+      expect(node[:tags]).to eql([])
     end
   end
 end

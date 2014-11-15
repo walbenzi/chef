@@ -48,84 +48,132 @@ end
 shared_examples_for "a file with the wrong content" do
   before do
     # Assert starting state is as expected
-    File.should exist(path)
+    expect(File).to exist(path)
     # Kinda weird, in this case @expected_checksum is the cksum of the file
     # with incorrect content.
-    sha256_checksum(path).should == @expected_checksum
+    expect(sha256_checksum(path)).to eq(@expected_checksum)
   end
 
-  include_context "diff disabled"
+  describe "when diff is disabled" do
 
-  context "when running action :create" do
-    context "with backups enabled" do
+    include_context "diff disabled"
+
+    context "when running action :create" do
+      context "with backups enabled" do
+        before do
+          resource.run_action(:create)
+        end
+
+        it "overwrites the file with the updated content when the :create action is run" do
+          expect(File.stat(path).mtime).to be > @expected_mtime
+          expect(sha256_checksum(path)).not_to eq(@expected_checksum)
+        end
+
+        it "backs up the existing file" do
+          expect(Dir.glob(backup_glob).size).to equal(1)
+        end
+
+        it "is marked as updated by last action" do
+          expect(resource).to be_updated_by_last_action
+        end
+
+        it "should restore the security contexts on selinux", :selinux_only do
+          expect(selinux_security_context_restored?(path)).to be_truthy
+        end
+      end
+
+      context "with backups disabled" do
+        before do
+          resource.backup(0)
+          resource.run_action(:create)
+        end
+
+        it "should not attempt to backup the existing file if :backup == 0" do
+          expect(Dir.glob(backup_glob).size).to equal(0)
+        end
+
+        it "should restore the security contexts on selinux", :selinux_only do
+          expect(selinux_security_context_restored?(path)).to be_truthy
+        end
+      end
+
+      context "with a checksum that does not match the content to deploy" do
+        before do
+          resource.checksum("aAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA")
+        end
+
+        it "raises an exception" do
+          expect{ resource.run_action(:create) }.to raise_error(Chef::Exceptions::ChecksumMismatch)
+        end
+      end
+    end
+
+    describe "when running action :create_if_missing" do
       before do
-        resource.run_action(:create)
+        resource.run_action(:create_if_missing)
       end
 
-      it "overwrites the file with the updated content when the :create action is run" do
-        File.stat(path).mtime.should > @expected_mtime
-        sha256_checksum(path).should_not == @expected_checksum
+      it "doesn't overwrite the file when the :create_if_missing action is run" do
+        expect(File.stat(path).mtime).to eq(@expected_mtime)
+        expect(sha256_checksum(path)).to eq(@expected_checksum)
       end
 
-      it "backs up the existing file" do
-        Dir.glob(backup_glob).size.should equal(1)
+      it "is not marked as updated" do
+        expect(resource).not_to be_updated_by_last_action
+      end
+
+      it "should restore the security contexts on selinux", :selinux_only do
+        expect(selinux_security_context_restored?(path)).to be_truthy
+      end
+    end
+
+    describe "when running action :delete" do
+      before do
+        resource.run_action(:delete)
+      end
+
+      it "deletes the file" do
+        expect(File).not_to exist(path)
       end
 
       it "is marked as updated by last action" do
-        resource.should be_updated_by_last_action
-      end
-
-      it "should restore the security contexts on selinux", :selinux_only do
-        selinux_security_context_restored?(path).should be_true
+        expect(resource).to be_updated_by_last_action
       end
     end
 
-    context "with backups disabled" do
-      before do
-        resource.backup(0)
-        resource.run_action(:create)
-      end
-
-      it "should not attempt to backup the existing file if :backup == 0" do
-        Dir.glob(backup_glob).size.should equal(0)
-      end
-
-      it "should restore the security contexts on selinux", :selinux_only do
-        selinux_security_context_restored?(path).should be_true
-      end
-    end
   end
 
-  describe "when running action :create_if_missing" do
-    before do
-      resource.run_action(:create_if_missing)
-    end
+  context "when diff is enabled" do
+    describe 'sensitive attribute' do
+      context "should be insensitive by default" do
+        it { expect(resource.sensitive).to(be_falsey) }
+      end
 
-    it "doesn't overwrite the file when the :create_if_missing action is run" do
-      File.stat(path).mtime.should == @expected_mtime
-      sha256_checksum(path).should == @expected_checksum
-    end
+      context "when set" do
+        before { resource.sensitive(true) }
 
-    it "is not marked as updated" do
-      resource.should_not be_updated_by_last_action
-    end
+        it "should be set on the resource" do
+          expect(resource.sensitive).to(be_truthy)
+        end
 
-    it "should restore the security contexts on selinux", :selinux_only do
-      selinux_security_context_restored?(path).should be_true
-    end
-  end
+        context "when running :create action" do
+          let(:provider) { resource.provider_for_action(:create) }
+          let(:reporter_messages) { provider.instance_variable_get("@converge_actions").actions[0][0] }
 
-  describe "when running action :delete" do
-    before do
-      resource.run_action(:delete)
-    end
+          before do
+            provider.run_action
+          end
 
-    it "deletes the file" do
-      File.should_not exist(path)
-    end
+          it "should suppress the diff" do
+            expect(resource.diff).to(include('suppressed sensitive resource'))
+            expect(reporter_messages[1]).to eq("suppressed sensitive resource")
+          end
 
-    it "is marked as updated by last action" do
-      resource.should be_updated_by_last_action
+          it "should still include the updated checksums" do
+            expect(reporter_messages[0]).to include("update content in file")
+          end
+        end
+      end
     end
   end
 end
@@ -133,8 +181,8 @@ end
 shared_examples_for "a file with the correct content" do
   before do
     # Assert starting state is as expected
-    File.should exist(path)
-    sha256_checksum(path).should == @expected_checksum
+    expect(File).to exist(path)
+    expect(sha256_checksum(path)).to eq(@expected_checksum)
   end
 
   include_context "diff disabled"
@@ -144,19 +192,19 @@ shared_examples_for "a file with the correct content" do
       resource.run_action(:create)
     end
     it "does not overwrite the original when the :create action is run" do
-      sha256_checksum(path).should == @expected_checksum
+      expect(sha256_checksum(path)).to eq(@expected_checksum)
     end
 
     it "does not update the mtime of the file when the :create action is run" do
-      File.stat(path).mtime.should == @expected_mtime
+      expect(File.stat(path).mtime).to eq(@expected_mtime)
     end
 
     it "is not marked as updated by last action" do
-      resource.should_not be_updated_by_last_action
+      expect(resource).not_to be_updated_by_last_action
     end
 
     it "should restore the security contexts on selinux", :selinux_only do
-      selinux_security_context_restored?(path).should be_true
+      expect(selinux_security_context_restored?(path)).to be_truthy
     end
   end
 
@@ -166,15 +214,15 @@ shared_examples_for "a file with the correct content" do
     end
 
     it "doesn't overwrite the file when the :create_if_missing action is run" do
-      sha256_checksum(path).should == @expected_checksum
+      expect(sha256_checksum(path)).to eq(@expected_checksum)
     end
 
     it "is not marked as updated by last action" do
-      resource.should_not be_updated_by_last_action
+      expect(resource).not_to be_updated_by_last_action
     end
 
     it "should restore the security contexts on selinux", :selinux_only do
-      selinux_security_context_restored?(path).should be_true
+      expect(selinux_security_context_restored?(path)).to be_truthy
     end
   end
 
@@ -184,11 +232,11 @@ shared_examples_for "a file with the correct content" do
     end
 
     it "deletes the file when the :delete action is run" do
-      File.should_not exist(path)
+      expect(File).not_to exist(path)
     end
 
     it "is marked as updated by last action" do
-      resource.should be_updated_by_last_action
+      expect(resource).to be_updated_by_last_action
     end
   end
 end
@@ -236,6 +284,7 @@ shared_examples_for "a file resource" do
 
     before do
       Chef::Config[:why_run] = true
+      Chef::Config[:ssl_verify_mode] = :verify_none
     end
 
     after do
@@ -251,7 +300,7 @@ shared_examples_for "a file resource" do
 
       it "successfully doesn't create the file" do
         resource.run_action(:create) # should not raise
-        File.should_not exist(path)
+        expect(File).not_to exist(path)
       end
     end
 
@@ -259,14 +308,14 @@ shared_examples_for "a file resource" do
 
   describe "when setting atomic_update" do
     it "booleans should work" do
-      lambda {resource.atomic_update(true)}.should_not raise_error
-      lambda {resource.atomic_update(false)}.should_not raise_error
+      expect {resource.atomic_update(true)}.not_to raise_error
+      expect {resource.atomic_update(false)}.not_to raise_error
     end
 
     it "anything else should raise an error" do
-      lambda {resource.atomic_update(:copy)}.should raise_error(ArgumentError)
-      lambda {resource.atomic_update(:move)}.should raise_error(ArgumentError)
-      lambda {resource.atomic_update(958)}.should raise_error(ArgumentError)
+      expect {resource.atomic_update(:copy)}.to raise_error(ArgumentError)
+      expect {resource.atomic_update(:move)}.to raise_error(ArgumentError)
+      expect {resource.atomic_update(958)}.to raise_error(ArgumentError)
     end
   end
 
@@ -285,26 +334,30 @@ shared_examples_for "file resource not pointing to a real file" do
     !symlink?(file_path) && File.file?(file_path)
   end
 
+  before do
+    Chef::Config[:ssl_verify_mode] = :verify_none
+  end
+
   describe "when force_unlink is set to true" do
     it ":create unlinks the target" do
-      real_file?(path).should be_false
+      expect(real_file?(path)).to be_falsey
       resource.force_unlink(true)
       resource.run_action(:create)
-      real_file?(path).should be_true
-      binread(path).should == expected_content
-      resource.should be_updated_by_last_action
+      expect(real_file?(path)).to be_truthy
+      expect(binread(path)).to eq(expected_content)
+      expect(resource).to be_updated_by_last_action
     end
   end
 
   describe "when force_unlink is set to false" do
     it ":create raises an error" do
-      lambda {resource.run_action(:create) }.should raise_error(Chef::Exceptions::FileTypeMismatch)
+      expect {resource.run_action(:create) }.to raise_error(Chef::Exceptions::FileTypeMismatch)
     end
   end
 
   describe "when force_unlink is not set (default)" do
     it ":create raises an error" do
-      lambda {resource.run_action(:create) }.should raise_error(Chef::Exceptions::FileTypeMismatch)
+      expect {resource.run_action(:create) }.to raise_error(Chef::Exceptions::FileTypeMismatch)
     end
   end
 end
@@ -315,6 +368,7 @@ shared_examples_for "a configured file resource" do
 
   before do
     Chef::Log.level = :info
+    Chef::Config[:ssl_verify_mode] = :verify_none
   end
 
    # note the stripping of the drive letter from the tmpdir on windows
@@ -387,7 +441,7 @@ shared_examples_for "a configured file resource" do
 
         after(:each) do
           # symlink should never be followed
-          binread(symlink_target).should == "This is so wrong!!!"
+          expect(binread(symlink_target)).to eq("This is so wrong!!!")
         end
 
         it_behaves_like "file resource not pointing to a real file"
@@ -423,7 +477,7 @@ shared_examples_for "a configured file resource" do
         end
 
         it "raises an InvalidSymlink error" do
-          lambda { resource.run_action(:create) }.should raise_error(Chef::Exceptions::InvalidSymlink)
+          expect { resource.run_action(:create) }.to raise_error(Chef::Exceptions::InvalidSymlink)
         end
 
         it "issues a warning/assumption in whyrun mode" do
@@ -451,7 +505,7 @@ shared_examples_for "a configured file resource" do
           FileUtils.rm_rf(link_path)
         end
         it "raises an InvalidSymlink error" do
-          lambda { resource.run_action(:create) }.should raise_error(Chef::Exceptions::InvalidSymlink)
+          expect { resource.run_action(:create) }.to raise_error(Chef::Exceptions::InvalidSymlink)
         end
 
         it "issues a warning/assumption in whyrun mode" do
@@ -482,7 +536,7 @@ shared_examples_for "a configured file resource" do
         end
 
         it "raises an InvalidSymlink error" do
-          lambda { resource.run_action(:create) }.should raise_error(Chef::Exceptions::FileTypeMismatch)
+          expect { resource.run_action(:create) }.to raise_error(Chef::Exceptions::FileTypeMismatch)
         end
 
         it "issues a warning/assumption in whyrun mode" do
@@ -510,7 +564,7 @@ shared_examples_for "a configured file resource" do
         after(:each) do
           # shared examples should not change our test setup of a file resource
           # pointing at a symlink:
-          resource.path.should == link_path
+          expect(resource.path).to eq(link_path)
           FileUtils.rm_rf(link_path)
         end
 
@@ -527,7 +581,7 @@ shared_examples_for "a configured file resource" do
 
           it "does not replace the symlink with a real file" do
             resource.run_action(:create)
-            File.should be_symlink(link_path)
+            expect(File).to be_symlink(link_path)
           end
 
         end
@@ -539,17 +593,17 @@ shared_examples_for "a configured file resource" do
           end
 
           it "updates the source file content" do
-            pending
+            skip
           end
 
           it "marks the resource as updated" do
             resource.run_action(:create)
-            resource.should be_updated_by_last_action
+            expect(resource).to be_updated_by_last_action
           end
 
           it "does not replace the symlink with a real file" do
             resource.run_action(:create)
-            File.should be_symlink(link_path)
+            expect(File).to be_symlink(link_path)
           end
         end
 
@@ -592,17 +646,69 @@ shared_examples_for "a configured file resource" do
         after(:each) do
           # shared examples should not change our test setup of a file resource
           # pointing at a symlink:
-          resource.path.should == link_to_link_path
+          expect(resource.path).to eq(link_to_link_path)
           FileUtils.rm_rf(link_to_file_path)
           FileUtils.rm_rf(link_to_link_path)
         end
 
         it "does not replace the symlink with a real file" do
           resource.run_action(:create)
-          File.should be_symlink(link_to_link_path)
-          File.should be_symlink(link_to_file_path)
+          expect(File).to be_symlink(link_to_link_path)
+          expect(File).to be_symlink(link_to_file_path)
         end
 
+      end
+    end
+  end
+
+  context "when the target file does not exist" do
+    before(:each) do
+      FileUtils.rm_rf(path)
+    end
+
+    after(:each) do
+      FileUtils.rm_rf(path)
+    end
+
+    def symlink?(file_path)
+      if windows?
+        Chef::ReservedNames::Win32::File.symlink?(file_path)
+      else
+        File.symlink?(file_path)
+      end
+    end
+
+    def real_file?(file_path)
+      !symlink?(file_path) && File.file?(file_path)
+    end
+
+    describe "when force_unlink is set to true" do
+      it ":create updates the target" do
+        resource.force_unlink(true)
+        resource.run_action(:create)
+        expect(real_file?(path)).to be_truthy
+        expect(binread(path)).to eq(expected_content)
+        expect(resource).to be_updated_by_last_action
+      end
+    end
+
+    describe "when force_unlink is set to false" do
+      it ":create updates the target" do
+        resource.force_unlink(true)
+        resource.run_action(:create)
+        expect(real_file?(path)).to be_truthy
+        expect(binread(path)).to eq(expected_content)
+        expect(resource).to be_updated_by_last_action
+      end
+    end
+
+    describe "when force_unlink is not set (default)" do
+      it ":create updates the target" do
+        resource.force_unlink(true)
+        resource.run_action(:create)
+        expect(real_file?(path)).to be_truthy
+        expect(binread(path)).to eq(expected_content)
+        expect(resource).to be_updated_by_last_action
       end
     end
   end
@@ -694,7 +800,7 @@ shared_examples_for "a configured file resource" do
     end
 
     before(:each) do
-      path.bytesize.should <= 104
+      expect(path.bytesize).to be <= 104
       UNIXServer.new(path)
     end
 
@@ -715,8 +821,8 @@ shared_examples_for "a configured file resource" do
       end
 
       it "should notify the other resources correctly" do
-        resource.should be_updated_by_last_action
-        resource.run_context.immediate_notifications(resource).length.should == 1
+        expect(resource).to be_updated_by_last_action
+        expect(resource.run_context.immediate_notifications(resource).length).to eq(1)
       end
     end
 
@@ -732,8 +838,8 @@ shared_examples_for "a configured file resource" do
       end
 
       it "should notify the other resources correctly" do
-        resource.should be_updated_by_last_action
-        resource.run_context.immediate_notifications(resource).length.should == 1
+        expect(resource).to be_updated_by_last_action
+        expect(resource.run_context.immediate_notifications(resource).length).to eq(1)
       end
     end
   end
@@ -741,7 +847,7 @@ shared_examples_for "a configured file resource" do
   context "when the target file does not exist" do
     before do
       # Assert starting state is expected
-      File.should_not exist(path)
+      expect(File).not_to exist(path)
     end
 
     describe "when running action :create" do
@@ -750,19 +856,19 @@ shared_examples_for "a configured file resource" do
       end
 
       it "creates the file when the :create action is run" do
-        File.should exist(path)
+        expect(File).to exist(path)
       end
 
       it "creates the file with the correct content when the :create action is run" do
-        binread(path).should == expected_content
+        expect(binread(path)).to eq(expected_content)
       end
 
       it "is marked as updated by last action" do
-        resource.should be_updated_by_last_action
+        expect(resource).to be_updated_by_last_action
       end
 
       it "should restore the security contexts on selinux", :selinux_only do
-        selinux_security_context_restored?(path).should be_true
+        expect(selinux_security_context_restored?(path)).to be_truthy
       end
     end
 
@@ -772,15 +878,15 @@ shared_examples_for "a configured file resource" do
       end
 
       it "creates the file with the correct content" do
-        binread(path).should == expected_content
+        expect(binread(path)).to eq(expected_content)
       end
 
       it "is marked as updated by last action" do
-        resource.should be_updated_by_last_action
+        expect(resource).to be_updated_by_last_action
       end
 
       it "should restore the security contexts on selinux", :selinux_only do
-        selinux_security_context_restored?(path).should be_true
+        expect(selinux_security_context_restored?(path)).to be_truthy
       end
     end
 
@@ -790,11 +896,11 @@ shared_examples_for "a configured file resource" do
       end
 
       it "deletes the file when the :delete action is run" do
-        File.should_not exist(path)
+        expect(File).not_to exist(path)
       end
 
       it "is not marked updated by last action" do
-        resource.should_not be_updated_by_last_action
+        expect(resource).not_to be_updated_by_last_action
       end
     end
   end
@@ -895,21 +1001,21 @@ shared_examples_for "a configured file resource" do
     describe ":create action should run without any updates" do
       before do
         # Assert starting state is as expected
-        File.should exist(path)
-        sha256_checksum(path).should == @expected_checksum
+        expect(File).to exist(path)
+        expect(sha256_checksum(path)).to eq(@expected_checksum)
         resource.run_action(:create)
       end
 
       it "does not overwrite the original when the :create action is run" do
-        sha256_checksum(path).should == @expected_checksum
+        expect(sha256_checksum(path)).to eq(@expected_checksum)
       end
 
       it "does not update the mtime of the file when the :create action is run" do
-        File.stat(path).mtime.should == @expected_mtime
+        expect(File.stat(path).mtime).to eq(@expected_mtime)
       end
 
       it "is not marked as updated by last action" do
-        resource.should_not be_updated_by_last_action
+        expect(resource).not_to be_updated_by_last_action
       end
     end
   end

@@ -63,7 +63,6 @@ module KnifeSupport
         Chef::Config[:verbosity] = ( DEBUG ? 2 : 0 )
         instance.config[:config_file] = File.join(CHEF_SPEC_DATA, "null_config.rb")
 
-
         # Configure chef with a (mostly) blank knife.rb
         # We set a global and then mutate it in our stub knife.rb so we can be
         # extra sure that we're not loading someone's real knife.rb and then
@@ -104,6 +103,9 @@ module KnifeSupport
   private
 
   class KnifeResult
+
+    include ::RSpec::Matchers
+
     def initialize(stdout, stderr, exit_code)
       @stdout = stdout
       @stderr = stderr
@@ -151,20 +153,20 @@ module KnifeSupport
       stderr_actual = @stderr.sub(/^WARNING: No knife configuration file found\n/, '')
 
       if expected[:stderr].is_a?(Regexp)
-        stderr_actual.should =~ expected[:stderr]
+        expect(stderr_actual).to match(expected[:stderr])
       else
-        stderr_actual.should == expected[:stderr]
+        expect(stderr_actual).to eq(expected[:stderr])
       end
       stdout_actual = @stdout
       if Chef::Platform.windows?
         stderr_actual = stderr_actual.gsub("\r\n", "\n")
         stdout_actual = stdout_actual.gsub("\r\n", "\n")
       end
-      @exit_code.should == expected[:exit_code]
+      expect(@exit_code).to eq(expected[:exit_code])
       if expected[:stdout].is_a?(Regexp)
-        stdout_actual.should =~ expected[:stdout]
+        expect(stdout_actual).to match(expected[:stdout])
       else
-        stdout_actual.should == expected[:stdout]
+        expect(stdout_actual).to eq(expected[:stdout])
       end
     end
   end

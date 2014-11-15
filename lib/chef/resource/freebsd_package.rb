@@ -1,6 +1,8 @@
 #
-# Author:: AJ Christensen (<aj@opscode.com>)
+# Authors:: AJ Christensen (<aj@opscode.com>)
+#           Richard Manyanza (<liseki@nyikacraftsmen.com>)
 # Copyright:: Copyright (c) 2008 Opscode, Inc.
+# Copyright:: Copyright (c) 2014 Richard Manyanza.
 # License:: Apache License, Version 2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,19 +19,48 @@
 #
 
 require 'chef/resource/package'
-require 'chef/provider/package/freebsd'
+require 'chef/provider/package/freebsd/port'
+require 'chef/provider/package/freebsd/pkg'
+require 'chef/provider/package/freebsd/pkgng'
+require 'chef/mixin/shell_out'
 
 class Chef
   class Resource
     class FreebsdPackage < Chef::Resource::Package
+      include Chef::Mixin::ShellOut
+
+      provides :package, platform: "freebsd"
 
       def initialize(name, run_context=nil)
         super
         @resource_name = :freebsd_package
-        @provider = Chef::Provider::Package::Freebsd
       end
 
+      def after_created
+        assign_provider
+      end
+
+      def supports_pkgng?
+        ships_with_pkgng? || !!shell_out!("make -V WITH_PKGNG", :env => nil).stdout.match(/yes/i)
+      end
+
+      private
+
+      def ships_with_pkgng?
+        # It was not until __FreeBSD_version 1000017 that pkgng became
+        # the default binary package manager. See '/usr/ports/Mk/bsd.port.mk'.
+        node.automatic[:os_version].to_i >= 1000017
+      end
+
+      def assign_provider
+        @provider = if @source.to_s =~ /^ports$/i
+                      Chef::Provider::Package::Freebsd::Port
+                    elsif supports_pkgng?
+                      Chef::Provider::Package::Freebsd::Pkgng
+                    else
+                      Chef::Provider::Package::Freebsd::Pkg
+                    end
+      end
     end
   end
 end
-

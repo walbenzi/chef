@@ -16,22 +16,24 @@
 # limitations under the License.
 #
 
-require 'chef/mixin/shell_out'
 require 'chef/provider/service'
+require 'chef/resource/service'
 require 'chef/mixin/command'
 
 class Chef
   class Provider
     class Service
       class Solaris < Chef::Provider::Service
-        include Chef::Mixin::ShellOut
+        attr_reader :maintenance
+
+        provides :service, os: "solaris2"
 
         def initialize(new_resource, run_context=nil)
           super
           @init_command = "/usr/sbin/svcadm"
           @status_command = "/bin/svcs -l"
+          @maintenace     = false
         end
-
 
         def load_current_resource
           @current_resource = Chef::Resource::Service.new(@new_resource.name)
@@ -44,6 +46,7 @@ class Chef
         end
 
         def enable_service
+          shell_out!("#{default_init_command} clear #{@new_resource.service_name}") if @maintenance
           shell_out!("#{default_init_command} enable -s #{@new_resource.service_name}")
         end
 
@@ -55,7 +58,7 @@ class Chef
         alias_method :start_service, :enable_service
 
         def reload_service
-          shell_out!("#{default_init_command} refresh #{@new_resource.service_name}")
+          shell_out_with_systems_locale!("#{default_init_command} refresh #{@new_resource.service_name}")
         end
 
         def restart_service
@@ -65,13 +68,14 @@ class Chef
         end
 
         def service_status
-          status = popen4("#{@status_command} #{@current_resource.service_name}") do |pid, stdin, stdout, stderr|
-            stdout.each do |line|
-              case line
-              when /state\s+online/
-                @current_resource.enabled(true)
-                @current_resource.running(true)
-              end
+          status = shell_out!("#{@status_command} #{@current_resource.service_name}", :returns => [0, 1])
+          status.stdout.each_line do |line|
+            case line
+            when /state\s+online/
+              @current_resource.enabled(true)
+              @current_resource.running(true)
+            when /state\s+maintenance/
+              @maintenance = true
             end
           end
           unless @current_resource.enabled

@@ -121,7 +121,7 @@ class Chef
     #
     # @return [String] the JSON string.
     def to_json(*a)
-      to_hash.to_json(*a)
+      Chef::JSONCompat.to_json(to_hash, *a)
     end
 
     def self.json_create(o)
@@ -162,9 +162,7 @@ class Chef
       if response.kind_of?(Chef::ApiClient)
         response
       else
-        client = Chef::ApiClient.new
-        client.name(response['clientname'])
-        client
+        json_create(response)
       end
     end
 

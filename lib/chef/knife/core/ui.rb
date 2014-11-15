@@ -21,6 +21,7 @@
 require 'forwardable'
 require 'chef/platform/query_helpers'
 require 'chef/knife/core/generic_presenter'
+require 'tempfile'
 
 class Chef
   class Knife
@@ -72,10 +73,8 @@ class Chef
         end
       end
 
-      alias :info :msg
-
-      # Prints a msg to stderr. Used for warn, error, and fatal.
-      def err(message)
+      # Prints a msg to stderr. Used for info, warn, error, and fatal.
+      def log(message)
         begin
           stderr.puts message
         rescue Errno::EPIPE => e
@@ -84,19 +83,22 @@ class Chef
         end
       end
 
+      alias :info :log
+      alias :err :log
+
       # Print a warning message
       def warn(message)
-        err("#{color('WARNING:', :yellow, :bold)} #{message}")
+        log("#{color('WARNING:', :yellow, :bold)} #{message}")
       end
 
       # Print an error message
       def error(message)
-        err("#{color('ERROR:', :red, :bold)} #{message}")
+        log("#{color('ERROR:', :red, :bold)} #{message}")
       end
 
       # Print a message describing a fatal error.
       def fatal(message)
-        err("#{color('FATAL:', :red, :bold)} #{message}")
+        log("#{color('FATAL:', :red, :bold)} #{message}")
       end
 
       def color(string, *colors)
@@ -111,7 +113,7 @@ class Chef
       # determined by the value of `config[:color]`. When output is not to a
       # terminal, colored output is never used
       def color?
-        Chef::Config[:color] && stdout.tty? && !Chef::Platform.windows?
+        Chef::Config[:color] && stdout.tty?
       end
 
       def ask(*args, &block)
@@ -165,19 +167,14 @@ class Chef
         output = Chef::JSONCompat.to_json_pretty(data)
 
         if (!config[:disable_editing])
-          filename = "knife-edit-"
-          0.upto(20) { filename += rand(9).to_s }
-          filename << ".json"
-          filename = File.join(Dir.tmpdir, filename)
-          tf = File.open(filename, "w")
-          tf.sync = true
-          tf.puts output
-          tf.close
-          raise "Please set EDITOR environment variable" unless system("#{config[:editor]} #{tf.path}")
-          tf = File.open(filename, "r")
-          output = tf.gets(nil)
-          tf.close
-          File.unlink(filename)
+          Tempfile.open([ 'knife-edit-', '.json' ]) do |tf|
+            tf.sync = true
+            tf.puts output
+            tf.close
+            raise "Please set EDITOR environment variable" unless system("#{config[:editor]} #{tf.path}")
+
+            output = IO.read(tf.path)
+          end
         end
 
         parse_output ? Chef::JSONCompat.from_json(output) : output
@@ -198,8 +195,8 @@ class Chef
         # We wouldn't have to do these shenanigans if all the editable objects
         # implemented to_hash, or if to_json against a hash returned a string
         # with stable key order.
-        object_parsed_again = Chef::JSONCompat.from_json(Chef::JSONCompat.to_json(object), :create_additions => false)
-        output_parsed_again = Chef::JSONCompat.from_json(Chef::JSONCompat.to_json(output), :create_additions => false)
+        object_parsed_again = Chef::JSONCompat.parse(Chef::JSONCompat.to_json(object))
+        output_parsed_again = Chef::JSONCompat.parse(Chef::JSONCompat.to_json(output))
         if object_parsed_again != output_parsed_again
           output.save
           self.msg("Saved #{output}")
@@ -209,24 +206,61 @@ class Chef
         output(format_for_display(object)) if config[:print_after]
       end
 
-      def confirm(question, append_instructions=true)
+      def confirmation_instructions(default_choice)
+        case default_choice
+        when true
+          '? (Y/n) '
+        when false
+          '? (y/N) '
+        else
+          '? (Y/N) '
+        end
+      end
+
+      # See confirm method for argument information
+      def confirm_without_exit(question, append_instructions=true, default_choice=nil)
         return true if config[:yes]
 
         stdout.print question
-        stdout.print "? (Y/N) " if append_instructions
+        stdout.print confirmation_instructions(default_choice) if append_instructions
+
         answer = stdin.readline
         answer.chomp!
+
         case answer
         when "Y", "y"
           true
         when "N", "n"
           self.msg("You said no, so I'm done here.")
-          exit 3
+          false
+        when ""
+          unless default_choice.nil?
+            default_choice
+          else
+            self.msg("I have no idea what to do with '#{answer}'")
+            self.msg("Just say Y or N, please.")
+            confirm_without_exit(question, append_instructions, default_choice)
+          end
         else
-          self.msg("I have no idea what to do with #{answer}")
+          self.msg("I have no idea what to do with '#{answer}'")
           self.msg("Just say Y or N, please.")
-          confirm(question)
+          confirm_without_exit(question, append_instructions, default_choice)
         end
+      end
+
+      #
+      # Not the ideal signature for a function but we need to stick with this
+      # for now until we get a chance to break our API in Chef 12.
+      #
+      # question => Question to print  before asking for confirmation
+      # append_instructions => Should print '? (Y/N)' as instructions
+      # default_choice => Set to true for 'Y', and false for 'N' as default answer
+      #
+      def confirm(question, append_instructions=true, default_choice=nil)
+        unless confirm_without_exit(question, append_instructions, default_choice)
+          exit 3
+        end
+        true
       end
 
     end

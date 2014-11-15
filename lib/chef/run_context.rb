@@ -24,6 +24,7 @@ require 'chef/role'
 require 'chef/log'
 require 'chef/recipe'
 require 'chef/run_context/cookbook_compiler'
+require 'chef/event_dispatch/events_output_stream'
 
 class Chef
 
@@ -60,6 +61,9 @@ class Chef
     # Event dispatcher for this run.
     attr_reader :events
 
+    # Hash of factoids for a reboot request.
+    attr_reader :reboot_info
+
     # Creates a new Chef::RunContext object and populates its fields. This object gets
     # used by the Chef Server to generate a fully compiled recipe list for a node.
     #
@@ -75,15 +79,17 @@ class Chef
       @loaded_recipes = {}
       @loaded_attributes = {}
       @events = events
+      @reboot_info = {}
 
       @node.run_context = self
+      @cookbook_compiler = nil
     end
 
     # Triggers the compile phase of the chef run. Implemented by
     # Chef::RunContext::CookbookCompiler
     def load(run_list_expansion)
-      compiler = CookbookCompiler.new(self, run_list_expansion, events)
-      compiler.compile
+      @cookbook_compiler = CookbookCompiler.new(self, run_list_expansion, events)
+      @cookbook_compiler.compile
     end
 
     # Adds an immediate notification to the
@@ -141,15 +147,38 @@ class Chef
       Chef::Log.debug("Loading Recipe #{recipe_name} via include_recipe")
 
       cookbook_name, recipe_short_name = Chef::Recipe.parse_recipe_name(recipe_name)
+
+      if unreachable_cookbook?(cookbook_name) # CHEF-4367
+        Chef::Log.warn(<<-ERROR_MESSAGE)
+MissingCookbookDependency:
+Recipe `#{recipe_name}` is not in the run_list, and cookbook '#{cookbook_name}'
+is not a dependency of any cookbook in the run_list.  To load this recipe,
+first add a dependency on cookbook '#{cookbook_name}' in the cookbook you're
+including it from in that cookbook's metadata.
+ERROR_MESSAGE
+      end
+
+
       if loaded_fully_qualified_recipe?(cookbook_name, recipe_short_name)
         Chef::Log.debug("I am not loading #{recipe_name}, because I have already seen it.")
         false
       else
         loaded_recipe(cookbook_name, recipe_short_name)
-
+        node.loaded_recipe(cookbook_name, recipe_short_name)
         cookbook = cookbook_collection[cookbook_name]
         cookbook.load_recipe(recipe_short_name, self)
       end
+    end
+
+    def load_recipe_file(recipe_file)
+      if !File.exist?(recipe_file)
+        raise Chef::Exceptions::RecipeNotFound, "could not find recipe file #{recipe_file}"
+      end
+
+      Chef::Log.debug("Loading Recipe File #{recipe_file}")
+      recipe = Chef::Recipe.new('@recipe_files', recipe_file, self)
+      recipe.from_file(recipe_file)
+      recipe
     end
 
     # Looks up an attribute file given the +cookbook_name+ and
@@ -217,6 +246,54 @@ class Chef
       cookbook.has_cookbook_file_for_node?(node, cb_file_name)
     end
 
+    # Delegates to CookbookCompiler#unreachable_cookbook?
+    # Used to raise an error when attempting to load a recipe belonging to a
+    # cookbook that is not in the dependency graph. See also: CHEF-4367
+    def unreachable_cookbook?(cookbook_name)
+      @cookbook_compiler.unreachable_cookbook?(cookbook_name)
+    end
+
+    # Open a stream object that can be printed into and will dispatch to events
+    #
+    # == Arguments
+    # options is a hash with these possible options:
+    # - name: a string that identifies the stream to the user. Preferably short.
+    #
+    # Pass a block and the stream will be yielded to it, and close on its own
+    # at the end of the block.
+    def open_stream(options = {})
+      stream = EventDispatch::EventsOutputStream.new(events, options)
+      if block_given?
+        begin
+          yield stream
+        ensure
+          stream.close
+        end
+      else
+        stream
+      end
+    end
+
+    # there are options for how to handle multiple calls to these functions:
+    # 1. first call always wins (never change @reboot_info once set).
+    # 2. last call always wins (happily change @reboot_info whenever).
+    # 3. raise an exception on the first conflict.
+    # 4. disable reboot after this run if anyone ever calls :cancel.
+    # 5. raise an exception on any second call.
+    # 6. ?
+    def request_reboot(reboot_info)
+      Chef::Log::info "Changing reboot status from #{@reboot_info.inspect} to #{reboot_info.inspect}"
+      @reboot_info = reboot_info
+    end
+
+    def cancel_reboot
+      Chef::Log::info "Changing reboot status from #{@reboot_info.inspect} to {}"
+      @reboot_info = {}
+    end
+
+    def reboot_requested?
+      @reboot_info.size > 0
+    end
 
     private
 

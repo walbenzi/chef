@@ -21,12 +21,14 @@
 # limitations under the License.
 #
 
+require 'tempfile'
 require 'net/https'
 require 'uri'
 require 'chef/http/basic_client'
 require 'chef/monkey_patches/string'
 require 'chef/monkey_patches/net_http'
 require 'chef/config'
+require 'chef/platform/query_helpers'
 require 'chef/exceptions'
 
 class Chef
@@ -50,7 +52,10 @@ class Chef
       end
 
       def handle_chunk(next_chunk)
-        @stream_handlers.inject(next_chunk) do |chunk, handler|
+        # stream handlers handle responses so must be applied in reverse order
+        # (same as #apply_stream_complete_middleware or #apply_response_midddleware)
+        @stream_handlers.reverse.inject(next_chunk) do |chunk, handler|
+          Chef::Log.debug("Chef::HTTP::StreamHandler calling #{handler.class}#handle_chunk")
           handler.handle_chunk(chunk)
         end
       end
@@ -94,7 +99,7 @@ class Chef
     # === Parameters
     # path:: path part of the request URL
     def head(path, headers={})
-      api_request(:HEAD, create_url(path), headers)
+      request(:HEAD, path, headers)
     end
 
     # Send an HTTP GET request to the path
@@ -102,7 +107,7 @@ class Chef
     # === Parameters
     # path:: The path to GET
     def get(path, headers={})
-      api_request(:GET, create_url(path), headers)
+      request(:GET, path, headers)
     end
 
     # Send an HTTP PUT request to the path
@@ -110,7 +115,7 @@ class Chef
     # === Parameters
     # path:: path part of the request URL
     def put(path, json, headers={})
-      api_request(:PUT, create_url(path), headers, json)
+      request(:PUT, path, headers, json)
     end
 
     # Send an HTTP POST request to the path
@@ -118,7 +123,7 @@ class Chef
     # === Parameters
     # path:: path part of the request URL
     def post(path, json, headers={})
-      api_request(:POST, create_url(path), headers, json)
+      request(:POST, path, headers, json)
     end
 
     # Send an HTTP DELETE request to the path
@@ -126,13 +131,13 @@ class Chef
     # === Parameters
     # path:: path part of the request URL
     def delete(path, headers={})
-      api_request(:DELETE, create_url(path), headers)
+      request(:DELETE, path, headers)
     end
 
-    # Makes an HTTP request to +url+ with the given +method+, +headers+, and
+    # Makes an HTTP request to +path+ with the given +method+, +headers+, and
     # +data+ (if applicable).
-    def request(method, url, headers={}, data=false)
-
+    def request(method, path, headers={}, data=false)
+      url = create_url(path)
       method, url, headers, data = apply_request_middleware(method, url, headers, data)
 
       response, rest_request, return_value = send_http_request(method, url, headers, data)
@@ -154,7 +159,8 @@ class Chef
     #
     # If no block is given, the tempfile is returned, which means it's up to
     # you to unlink the tempfile when you're done with it.
-    def streaming_request(url, headers, &block)
+    def streaming_request(path, headers={}, &block)
+      url = create_url(path)
       response, rest_request, return_value = nil, nil, nil
       tempfile = nil
 
@@ -164,17 +170,21 @@ class Chef
       response, rest_request, return_value = send_http_request(method, url, headers, data) do |http_response|
         if http_response.kind_of?(Net::HTTPSuccess)
           tempfile = stream_to_tempfile(url, http_response)
-          if block_given?
-            begin
-              yield tempfile
-            ensure
-              tempfile && tempfile.close!
-            end
-          end
         end
+        apply_stream_complete_middleware(http_response, rest_request, return_value)
       end
-      unless response.kind_of?(Net::HTTPSuccess) or response.kind_of?(Net::HTTPRedirection)
+
+      return nil if response.kind_of?(Net::HTTPRedirection)
+      unless response.kind_of?(Net::HTTPSuccess)
         response.error!
+      end
+
+      if block_given?
+        begin
+          yield tempfile
+        ensure
+          tempfile && tempfile.close!
+        end
       end
       tempfile
     rescue Exception => e
@@ -185,29 +195,45 @@ class Chef
       raise
     end
 
-    def http_client
-      BasicClient.new(create_url(url))
+    def http_client(base_url=nil)
+      base_url ||= url
+      BasicClient.new(base_url)
     end
 
     protected
 
     def create_url(path)
+      return path if path.is_a?(URI)
       if path =~ /^(http|https):\/\//
         URI.parse(path)
+      elsif path.nil? or path.empty?
+        URI.parse(@url)
       else
-        URI.parse("#{@url}/#{path}")
+        # The regular expressions used here are to make sure '@url' does not have
+        # any trailing slashes and 'path' does not have any leading slashes. This
+        # way they are always joined correctly using just one slash.
+        URI.parse(@url.gsub(%r{/+$}, '') + '/' + path.gsub(%r{^/+}, ''))
       end
     end
 
     def apply_request_middleware(method, url, headers, data)
       middlewares.inject([method, url, headers, data]) do |req_data, middleware|
+        Chef::Log.debug("Chef::HTTP calling #{middleware.class}#handle_request")
         middleware.handle_request(*req_data)
       end
     end
 
     def apply_response_middleware(response, rest_request, return_value)
       middlewares.reverse.inject([response, rest_request, return_value]) do |res_data, middleware|
+        Chef::Log.debug("Chef::HTTP calling #{middleware.class}#handle_response")
         middleware.handle_response(*res_data)
+      end
+    end
+
+    def apply_stream_complete_middleware(response, rest_request, return_value)
+      middlewares.reverse.inject([response, rest_request, return_value]) do |res_data, middleware|
+        Chef::Log.debug("Chef::HTTP calling #{middleware.class}#handle_stream_complete")
+        middleware.handle_stream_complete(*res_data)
       end
     end
 
@@ -228,29 +254,24 @@ class Chef
       headers = build_headers(method, url, headers, body)
 
       retrying_http_errors(url) do
+        client = http_client(url)
+        return_value = nil
         if block_given?
-          request, response = http_client.request(method, url, body, headers, &response_handler)
+          request, response = client.request(method, url, body, headers, &response_handler)
         else
-          request, response = http_client.request(method, url, body, headers) {|r| r.read_body }
+          request, response = client.request(method, url, body, headers) {|r| r.read_body }
+          return_value = response.read_body
         end
         @last_response = response
 
-        Chef::Log.debug("---- HTTP Status and Header Data: ----")
-        Chef::Log.debug("HTTP #{response.http_version} #{response.code} #{response.msg}")
-
-        response.each do |header, value|
-          Chef::Log.debug("#{header}: #{value}")
-        end
-        Chef::Log.debug("---- End HTTP Status/Header Data ----")
-
         if response.kind_of?(Net::HTTPSuccess)
-          [response, request, nil]
+          [response, request, return_value]
         elsif response.kind_of?(Net::HTTPNotModified) # Must be tested before Net::HTTPRedirection because it's subclass.
           [response, request, false]
         elsif redirect_location = redirected_to(response)
           if [:GET, :HEAD].include?(method)
             follow_redirect do
-              send_http_request(method, create_url(redirect_location), headers, body, &response_handler)
+              send_http_request(method, url+redirect_location, headers, body, &response_handler)
             end
           else
             raise Exceptions::InvalidRedirect, "#{method} request was redirected from #{url} to #{redirect_location}. Only GET and HEAD support redirects."
@@ -268,11 +289,26 @@ class Chef
     def retrying_http_errors(url)
       http_attempts = 0
       begin
-        http_attempts += 1
-
-        yield
-
+        loop do
+          http_attempts += 1
+          response, request, return_value = yield
+          # handle HTTP 50X Error
+          if response.kind_of?(Net::HTTPServerError)
+            if http_retry_count - http_attempts + 1 > 0
+              sleep_time = 1 + (2 ** http_attempts) + rand(2 ** http_attempts)
+              Chef::Log.error("Server returned error #{response.code} for #{url}, retrying #{http_attempts}/#{http_retry_count} in #{sleep_time}s")
+              sleep(sleep_time)
+              redo
+            end
+          end
+          return [response, request, return_value]
+        end
       rescue SocketError, Errno::ETIMEDOUT => e
+        if http_retry_count - http_attempts + 1 > 0
+          Chef::Log.error("Error connecting to #{url}, retry #{http_attempts}/#{http_retry_count}")
+          sleep(http_retry_delay)
+          retry
+        end
         e.message.replace "Error connecting to #{url} - #{e.message}"
         raise e
       rescue Errno::ECONNREFUSED
@@ -289,14 +325,6 @@ class Chef
           retry
         end
         raise Timeout::Error, "Timeout connecting to #{url}, giving up"
-      rescue Net::HTTPFatalError => e
-        if http_retry_count - http_attempts + 1 > 0
-          sleep_time = 1 + (2 ** http_attempts) + rand(2 ** http_attempts)
-          Chef::Log.error("Server returned error for #{url}, retrying #{http_attempts}/#{http_retry_count} in #{sleep_time}s")
-          sleep(sleep_time)
-          retry
-        end
-        raise
       end
     end
 
@@ -320,7 +348,6 @@ class Chef
       yield
     ensure
       @redirects_followed = 0
-      @authenticator.sign_request = true
     end
 
     private
@@ -376,4 +403,3 @@ class Chef
 
   end
 end
-

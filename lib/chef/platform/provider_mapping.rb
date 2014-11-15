@@ -16,21 +16,15 @@
 # limitations under the License.
 #
 
-require 'chef/config'
 require 'chef/log'
+require 'chef/exceptions'
 require 'chef/mixin/params_validate'
 require 'chef/version_constraint/platform'
 
 # This file depends on nearly every provider in chef, but requiring them
 # directly causes circular requires resulting in uninitialized constant errors.
+# Therefore, we do the includes inline rather than up top.
 require 'chef/provider'
-require 'chef/provider/log'
-require 'chef/provider/user'
-require 'chef/provider/group'
-require 'chef/provider/mount'
-require 'chef/provider/service'
-require 'chef/provider/package'
-require 'chef/provider/ifconfig'
 
 
 class Chef
@@ -40,339 +34,373 @@ class Chef
       attr_writer :platforms
 
       def platforms
-        @platforms ||= {
-          :mac_os_x => {
-            :default => {
-              :package => Chef::Provider::Package::Macports,
-              :service => Chef::Provider::Service::Macosx,
-              :user => Chef::Provider::User::Dscl,
-              :group => Chef::Provider::Group::Dscl
-            }
-          },
-          :mac_os_x_server => {
-            :default => {
-              :package => Chef::Provider::Package::Macports,
-              :service => Chef::Provider::Service::Macosx,
-              :user => Chef::Provider::User::Dscl,
-              :group => Chef::Provider::Group::Dscl
-            }
-          },
-          :freebsd => {
-            :default => {
-              :group   => Chef::Provider::Group::Pw,
-              :package => Chef::Provider::Package::Freebsd,
-              :service => Chef::Provider::Service::Freebsd,
-              :user    => Chef::Provider::User::Pw,
-              :cron    => Chef::Provider::Cron
-            }
-          },
-          :ubuntu   => {
-            :default => {
-              :package => Chef::Provider::Package::Apt,
-              :service => Chef::Provider::Service::Debian,
-              :cron => Chef::Provider::Cron,
-              :mdadm => Chef::Provider::Mdadm
+        @platforms ||= begin
+          require 'chef/providers'
+
+          {
+            :mac_os_x => {
+              :default => {
+                :package => Chef::Provider::Package::Homebrew,
+                :user => Chef::Provider::User::Dscl,
+                :group => Chef::Provider::Group::Dscl
+              }
             },
-            ">= 11.10" => {
-              :ifconfig => Chef::Provider::Ifconfig::Debian
-            }
-          },
-          :gcel   => {
-            :default => {
-              :package => Chef::Provider::Package::Apt,
-              :service => Chef::Provider::Service::Debian,
-              :cron => Chef::Provider::Cron,
-              :mdadm => Chef::Provider::Mdadm
-            }
-          },
-          :linaro   => {
-            :default => {
-              :package => Chef::Provider::Package::Apt,
-              :service => Chef::Provider::Service::Debian,
-              :cron => Chef::Provider::Cron,
-              :mdadm => Chef::Provider::Mdadm
-            }
-          },
-          :raspbian   => {
-            :default => {
-              :package => Chef::Provider::Package::Apt,
-              :service => Chef::Provider::Service::Debian,
-              :cron => Chef::Provider::Cron,
-              :mdadm => Chef::Provider::Mdadm
-            }
-          },
-          :linuxmint   => {
-            :default => {
-              :package => Chef::Provider::Package::Apt,
-              :service => Chef::Provider::Service::Upstart,
-              :cron => Chef::Provider::Cron,
-              :mdadm => Chef::Provider::Mdadm
-            }
-          },
-          :debian => {
-            :default => {
-              :package => Chef::Provider::Package::Apt,
-              :service => Chef::Provider::Service::Debian,
-              :cron => Chef::Provider::Cron,
-              :mdadm => Chef::Provider::Mdadm
+            :mac_os_x_server => {
+              :default => {
+                :package => Chef::Provider::Package::Homebrew,
+                :user => Chef::Provider::User::Dscl,
+                :group => Chef::Provider::Group::Dscl
+              }
             },
-            ">= 6.0" => {
-              :service => Chef::Provider::Service::Insserv
+            :freebsd => {
+              :default => {
+                :group   => Chef::Provider::Group::Pw,
+                :user    => Chef::Provider::User::Pw,
+                :cron    => Chef::Provider::Cron
+              }
             },
-            ">= 7.0" => {
-              :ifconfig => Chef::Provider::Ifconfig::Debian
-            }
-          },
-          :xenserver   => {
-            :default => {
-              :service => Chef::Provider::Service::Redhat,
-              :cron => Chef::Provider::Cron,
-              :package => Chef::Provider::Package::Yum,
-              :mdadm => Chef::Provider::Mdadm
-            }
-          },
-          :xcp   => {
-            :default => {
-              :service => Chef::Provider::Service::Redhat,
-              :cron => Chef::Provider::Cron,
-              :package => Chef::Provider::Package::Yum,
-              :mdadm => Chef::Provider::Mdadm
-            }
-          },
-          :centos   => {
-            :default => {
-              :service => Chef::Provider::Service::Redhat,
-              :cron => Chef::Provider::Cron,
-              :package => Chef::Provider::Package::Yum,
-              :mdadm => Chef::Provider::Mdadm,
-              :ifconfig => Chef::Provider::Ifconfig::Redhat
-            }
-          },
-          :amazon   => {
-            :default => {
-              :service => Chef::Provider::Service::Redhat,
-              :cron => Chef::Provider::Cron,
-              :package => Chef::Provider::Package::Yum,
-              :mdadm => Chef::Provider::Mdadm
-            }
-          },
-          :scientific => {
-            :default => {
-              :service => Chef::Provider::Service::Redhat,
-              :cron => Chef::Provider::Cron,
-              :package => Chef::Provider::Package::Yum,
-              :mdadm => Chef::Provider::Mdadm
-            }
-          },
-          :fedora   => {
-            :default => {
-              :service => Chef::Provider::Service::Redhat,
-              :cron => Chef::Provider::Cron,
-              :package => Chef::Provider::Package::Yum,
-              :mdadm => Chef::Provider::Mdadm,
-              :ifconfig => Chef::Provider::Ifconfig::Redhat
-            }
-          },
-          :opensuse     => {
-            :default => {
-              :service => Chef::Provider::Service::Redhat,
-              :cron => Chef::Provider::Cron,
-              :package => Chef::Provider::Package::Zypper,
-              :group => Chef::Provider::Group::Suse
+            :ubuntu   => {
+              :default => {
+                :package => Chef::Provider::Package::Apt,
+                :service => Chef::Provider::Service::Debian,
+                :cron => Chef::Provider::Cron,
+                :mdadm => Chef::Provider::Mdadm
+              },
+              ">= 11.10" => {
+                :ifconfig => Chef::Provider::Ifconfig::Debian
+              }
+              # Chef::Provider::Service::Upstart is a candidate to be used in
+              # ubuntu versions >= 13.10 but it currently requires all the
+              # services to have an entry under /etc/init. We need to update it
+              # to use the service ctl apis in order to migrate to using it on
+              # ubuntu >= 13.10.
             },
-            ">= 12.3" => {
-              :group => Chef::Provider::Group::Usermod
-            }
-          },
-          :suse     => {
-            :default => {
-              :service => Chef::Provider::Service::Redhat,
-              :cron => Chef::Provider::Cron,
-              :package => Chef::Provider::Package::Zypper,
-              :group => Chef::Provider::Group::Suse
+            :gcel   => {
+              :default => {
+                :package => Chef::Provider::Package::Apt,
+                :service => Chef::Provider::Service::Debian,
+                :cron => Chef::Provider::Cron,
+                :mdadm => Chef::Provider::Mdadm
+              }
             },
-            ###############################################
-            # TODO: Remove this after ohai update is released.
-            # Only OpenSuSE 12.3+ should use the Usermod group provider:
-            # Ohai before OHAI-339 is applied reports both OpenSuSE and SuSE
-            # Enterprise as "suse", Ohai after OHAI-339 will report OpenSuSE as
-            # "opensuse".
-            #
-            # In order to support OpenSuSE both before and after the Ohai
-            # change, I'm leaving this here. It needs to get removed before
-            # SuSE enterprise 12.3 ships.
-            ">= 12.3" => {
-              :group => Chef::Provider::Group::Usermod
-            }
-          },
-          :oracle  => {
-            :default => {
-              :service => Chef::Provider::Service::Redhat,
-              :cron => Chef::Provider::Cron,
-              :package => Chef::Provider::Package::Yum,
-              :mdadm => Chef::Provider::Mdadm
-            }
-          },
-          :redhat   => {
-            :default => {
-              :service => Chef::Provider::Service::Redhat,
-              :cron => Chef::Provider::Cron,
-              :package => Chef::Provider::Package::Yum,
-              :mdadm => Chef::Provider::Mdadm,
-              :ifconfig => Chef::Provider::Ifconfig::Redhat
-            }
-          },
-          :gentoo   => {
-            :default => {
-              :package => Chef::Provider::Package::Portage,
-              :service => Chef::Provider::Service::Gentoo,
-              :cron => Chef::Provider::Cron,
-              :mdadm => Chef::Provider::Mdadm
-            }
-          },
-          :arch   => {
-            :default => {
-              :package => Chef::Provider::Package::Pacman,
-              :service => Chef::Provider::Service::Arch,
-              :cron => Chef::Provider::Cron,
-              :mdadm => Chef::Provider::Mdadm
-            }
-          },
-          :mswin => {
-            :default => {
-              :env =>  Chef::Provider::Env::Windows,
-              :service => Chef::Provider::Service::Windows,
-              :user => Chef::Provider::User::Windows,
-              :group => Chef::Provider::Group::Windows,
-              :mount => Chef::Provider::Mount::Windows
-            }
-          },
-          :mingw32 => {
-            :default => {
-              :env =>  Chef::Provider::Env::Windows,
-              :service => Chef::Provider::Service::Windows,
-              :user => Chef::Provider::User::Windows,
-              :group => Chef::Provider::Group::Windows,
-              :mount => Chef::Provider::Mount::Windows
-            }
-          },
-          :windows => {
-            :default => {
-              :env =>  Chef::Provider::Env::Windows,
-              :service => Chef::Provider::Service::Windows,
-              :user => Chef::Provider::User::Windows,
-              :group => Chef::Provider::Group::Windows,
-              :mount => Chef::Provider::Mount::Windows
-            }
-          },
-          :solaris  => {},
-          :openindiana => {
-            :default => {
-              :service => Chef::Provider::Service::Solaris,
-              :package => Chef::Provider::Package::Ips,
-              :cron => Chef::Provider::Cron::Solaris,
-              :group => Chef::Provider::Group::Usermod
-            }
-          },
-          :opensolaris => {
-            :default => {
-              :service => Chef::Provider::Service::Solaris,
-              :package => Chef::Provider::Package::Ips,
-              :cron => Chef::Provider::Cron::Solaris,
-              :group => Chef::Provider::Group::Usermod
-            }
-          },
-          :nexentacore => {
-            :default => {
-              :service => Chef::Provider::Service::Solaris,
-              :package => Chef::Provider::Package::Solaris,
-              :cron => Chef::Provider::Cron::Solaris,
-              :group => Chef::Provider::Group::Usermod
-            }
-          },
-          :omnios => {
-            :default => {
-              :service => Chef::Provider::Service::Solaris,
-              :package => Chef::Provider::Package::Ips,
-              :cron => Chef::Provider::Cron::Solaris,
-              :group => Chef::Provider::Group::Usermod,
-              :user => Chef::Provider::User::Solaris,
-            }
-          },
-          :solaris2 => {
-            :default => {
-              :service => Chef::Provider::Service::Solaris,
-              :package => Chef::Provider::Package::Ips,
-              :cron => Chef::Provider::Cron::Solaris,
-              :group => Chef::Provider::Group::Usermod,
-              :user => Chef::Provider::User::Solaris,
+            :linaro   => {
+              :default => {
+                :package => Chef::Provider::Package::Apt,
+                :service => Chef::Provider::Service::Debian,
+                :cron => Chef::Provider::Cron,
+                :mdadm => Chef::Provider::Mdadm
+              }
             },
-            ">= 5.9" => {
-              :service => Chef::Provider::Service::Solaris,
-              :package => Chef::Provider::Package::Solaris,
-              :cron => Chef::Provider::Cron::Solaris,
-              :group => Chef::Provider::Group::Usermod,
-              :user => Chef::Provider::User::Solaris,
-            }
-          },
-          :smartos => {
+            :raspbian   => {
+              :default => {
+                :package => Chef::Provider::Package::Apt,
+                :service => Chef::Provider::Service::Debian,
+                :cron => Chef::Provider::Cron,
+                :mdadm => Chef::Provider::Mdadm
+              }
+            },
+            :linuxmint   => {
+              :default => {
+                :package => Chef::Provider::Package::Apt,
+                :service => Chef::Provider::Service::Upstart,
+                :cron => Chef::Provider::Cron,
+                :mdadm => Chef::Provider::Mdadm
+              }
+            },
+            :debian => {
+              :default => {
+                :package => Chef::Provider::Package::Apt,
+                :service => Chef::Provider::Service::Debian,
+                :cron => Chef::Provider::Cron,
+                :mdadm => Chef::Provider::Mdadm
+              },
+              ">= 6.0" => {
+                :service => Chef::Provider::Service::Insserv
+              },
+              ">= 7.0" => {
+                :ifconfig => Chef::Provider::Ifconfig::Debian
+              }
+            },
+            :xenserver   => {
+              :default => {
+                :service => Chef::Provider::Service::Redhat,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Yum,
+                :mdadm => Chef::Provider::Mdadm
+              }
+            },
+            :xcp   => {
+              :default => {
+                :service => Chef::Provider::Service::Redhat,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Yum,
+                :mdadm => Chef::Provider::Mdadm
+              }
+            },
+            :centos   => {
+              :default => {
+                :service => Chef::Provider::Service::Systemd,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Yum,
+                :mdadm => Chef::Provider::Mdadm,
+                :ifconfig => Chef::Provider::Ifconfig::Redhat
+              },
+              "< 7" => {
+                :service => Chef::Provider::Service::Redhat
+              }
+            },
+            :amazon   => {
+              :default => {
+                :service => Chef::Provider::Service::Redhat,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Yum,
+                :mdadm => Chef::Provider::Mdadm
+              }
+            },
+            :scientific => {
+              :default => {
+                :service => Chef::Provider::Service::Systemd,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Yum,
+                :mdadm => Chef::Provider::Mdadm
+              },
+              "< 7" => {
+                :service => Chef::Provider::Service::Redhat
+              }
+            },
+            :fedora   => {
+              :default => {
+                :service => Chef::Provider::Service::Systemd,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Yum,
+                :mdadm => Chef::Provider::Mdadm,
+                :ifconfig => Chef::Provider::Ifconfig::Redhat
+              },
+              "< 15" => {
+                :service => Chef::Provider::Service::Redhat
+              }
+            },
+            :opensuse     => {
+              :default => {
+                :service => Chef::Provider::Service::Redhat,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Zypper,
+                :group => Chef::Provider::Group::Suse
+              },
+              # Only OpenSuSE 12.3+ should use the Usermod group provider:
+              ">= 12.3" => {
+                :group => Chef::Provider::Group::Usermod
+              }
+            },
+            :suse     => {
+              :default => {
+                :service => Chef::Provider::Service::Systemd,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Zypper,
+                :group => Chef::Provider::Group::Gpasswd
+              },
+              "< 12.0" => {
+                :group => Chef::Provider::Group::Suse,
+                :service => Chef::Provider::Service::Redhat
+              }
+            },
+            :oracle  => {
+              :default => {
+                :service => Chef::Provider::Service::Systemd,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Yum,
+                :mdadm => Chef::Provider::Mdadm
+              },
+              "< 7" => {
+                :service => Chef::Provider::Service::Redhat
+              }
+            },
+            :redhat   => {
+              :default => {
+                :service => Chef::Provider::Service::Systemd,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Yum,
+                :mdadm => Chef::Provider::Mdadm,
+                :ifconfig => Chef::Provider::Ifconfig::Redhat
+              },
+              "< 7" => {
+                :service => Chef::Provider::Service::Redhat
+              }
+            },
+            :ibm_powerkvm   => {
+              :default => {
+                :service => Chef::Provider::Service::Redhat,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Yum,
+                :mdadm => Chef::Provider::Mdadm,
+                :ifconfig => Chef::Provider::Ifconfig::Redhat
+              }
+            },
+            :cloudlinux   => {
+              :default => {
+                :service => Chef::Provider::Service::Redhat,
+                :cron => Chef::Provider::Cron,
+                :package => Chef::Provider::Package::Yum,
+                :mdadm => Chef::Provider::Mdadm,
+                :ifconfig => Chef::Provider::Ifconfig::Redhat
+              }
+            },
+            :parallels   => {
+                :default => {
+                    :service => Chef::Provider::Service::Redhat,
+                    :cron => Chef::Provider::Cron,
+                    :package => Chef::Provider::Package::Yum,
+                    :mdadm => Chef::Provider::Mdadm,
+                    :ifconfig => Chef::Provider::Ifconfig::Redhat
+                }
+            },
+            :gentoo   => {
+              :default => {
+                :package => Chef::Provider::Package::Portage,
+                :service => Chef::Provider::Service::Gentoo,
+                :cron => Chef::Provider::Cron,
+                :mdadm => Chef::Provider::Mdadm
+              }
+            },
+            :arch   => {
+              :default => {
+                :package => Chef::Provider::Package::Pacman,
+                :service => Chef::Provider::Service::Systemd,
+                :cron => Chef::Provider::Cron,
+                :mdadm => Chef::Provider::Mdadm
+              }
+            },
+            :mswin => {
+              :default => {
+                :env =>  Chef::Provider::Env::Windows,
+                :user => Chef::Provider::User::Windows,
+                :group => Chef::Provider::Group::Windows,
+                :mount => Chef::Provider::Mount::Windows,
+                :batch => Chef::Provider::Batch,
+                :powershell_script => Chef::Provider::PowershellScript
+              }
+            },
+            :mingw32 => {
+              :default => {
+                :env =>  Chef::Provider::Env::Windows,
+                :user => Chef::Provider::User::Windows,
+                :group => Chef::Provider::Group::Windows,
+                :mount => Chef::Provider::Mount::Windows,
+                :batch => Chef::Provider::Batch,
+                :powershell_script => Chef::Provider::PowershellScript
+              }
+            },
+            :windows => {
+              :default => {
+                :env =>  Chef::Provider::Env::Windows,
+                :user => Chef::Provider::User::Windows,
+                :group => Chef::Provider::Group::Windows,
+                :mount => Chef::Provider::Mount::Windows,
+                :batch => Chef::Provider::Batch,
+                :powershell_script => Chef::Provider::PowershellScript
+              }
+            },
+            :solaris  => {},
+            :openindiana => {
+              :default => {
+                :mount => Chef::Provider::Mount::Solaris,
+                :package => Chef::Provider::Package::Ips,
+                :cron => Chef::Provider::Cron::Solaris,
+                :group => Chef::Provider::Group::Usermod
+              }
+            },
+            :opensolaris => {
+              :default => {
+                :mount => Chef::Provider::Mount::Solaris,
+                :package => Chef::Provider::Package::Ips,
+                :cron => Chef::Provider::Cron::Solaris,
+                :group => Chef::Provider::Group::Usermod
+              }
+            },
+            :nexentacore => {
+              :default => {
+                :mount => Chef::Provider::Mount::Solaris,
+                :package => Chef::Provider::Package::Solaris,
+                :cron => Chef::Provider::Cron::Solaris,
+                :group => Chef::Provider::Group::Usermod
+              }
+            },
+            :omnios => {
+              :default => {
+                :mount => Chef::Provider::Mount::Solaris,
+                :package => Chef::Provider::Package::Ips,
+                :cron => Chef::Provider::Cron::Solaris,
+                :group => Chef::Provider::Group::Usermod,
+                :user => Chef::Provider::User::Solaris,
+              }
+            },
+            :solaris2 => {
+              :default => {
+                :mount => Chef::Provider::Mount::Solaris,
+                :package => Chef::Provider::Package::Ips,
+                :cron => Chef::Provider::Cron::Solaris,
+                :group => Chef::Provider::Group::Usermod,
+                :user => Chef::Provider::User::Solaris,
+              },
+              "< 5.11" => {
+                :mount => Chef::Provider::Mount::Solaris,
+                :package => Chef::Provider::Package::Solaris,
+                :cron => Chef::Provider::Cron::Solaris,
+                :group => Chef::Provider::Group::Usermod,
+                :user => Chef::Provider::User::Solaris,
+              }
+            },
+            :smartos => {
+              :default => {
+                :mount => Chef::Provider::Mount::Solaris,
+                :package => Chef::Provider::Package::SmartOS,
+                :cron => Chef::Provider::Cron::Solaris,
+                :group => Chef::Provider::Group::Usermod
+              }
+            },
+            :netbsd => {
+              :default => {
+                :group => Chef::Provider::Group::Groupmod
+              }
+            },
+            :openbsd => {
+              :default => {
+                :group => Chef::Provider::Group::Usermod,
+                :package => Chef::Provider::Package::Openbsd
+              }
+            },
+            :hpux => {
+              :default => {
+                :group => Chef::Provider::Group::Usermod
+              }
+            },
+            :aix => {
+              :default => {
+                :group => Chef::Provider::Group::Aix,
+                :mount => Chef::Provider::Mount::Aix,
+                :ifconfig => Chef::Provider::Ifconfig::Aix,
+                :cron => Chef::Provider::Cron::Aix,
+                :package => Chef::Provider::Package::Aix,
+                :user => Chef::Provider::User::Aix,
+                :service => Chef::Provider::Service::Aix
+              }
+            },
+            :exherbo => {
+              :default => {
+                :package => Chef::Provider::Package::Paludis,
+                :service => Chef::Provider::Service::Systemd,
+                :cron => Chef::Provider::Cron,
+                :mdadm => Chef::Provider::Mdadm
+              }
+            },
             :default => {
-              :service => Chef::Provider::Service::Solaris,
-              :package => Chef::Provider::Package::SmartOS,
-              :cron => Chef::Provider::Cron::Solaris,
-              :group => Chef::Provider::Group::Usermod
+              :mount => Chef::Provider::Mount::Mount,
+              :user => Chef::Provider::User::Useradd,
+              :group => Chef::Provider::Group::Gpasswd,
+              :ifconfig => Chef::Provider::Ifconfig,
             }
-          },
-          :netbsd => {
-            :default => {
-              :service => Chef::Provider::Service::Freebsd,
-              :group => Chef::Provider::Group::Groupmod
-            }
-          },
-          :openbsd => {
-            :default => {
-              :group => Chef::Provider::Group::Usermod
-            }
-          },
-          :hpux => {
-            :default => {
-              :group => Chef::Provider::Group::Usermod
-            }
-          },
-          :aix => {
-            :default => {
-              :group => Chef::Provider::Group::Aix,
-              :mount => Chef::Provider::Mount::Aix,
-              :ifconfig => Chef::Provider::Ifconfig::Aix,
-              :cron => Chef::Provider::Cron::Aix,
-              :package => Chef::Provider::Package::Aix
-            }
-          },
-          :default  => {
-            :file => Chef::Provider::File,
-            :directory => Chef::Provider::Directory,
-            :link => Chef::Provider::Link,
-            :template => Chef::Provider::Template,
-            :remote_directory => Chef::Provider::RemoteDirectory,
-            :execute => Chef::Provider::Execute,
-            :mount => Chef::Provider::Mount::Mount,
-            :script => Chef::Provider::Script,
-            :service => Chef::Provider::Service::Init,
-            :perl => Chef::Provider::Script,
-            :python => Chef::Provider::Script,
-            :ruby => Chef::Provider::Script,
-            :bash => Chef::Provider::Script,
-            :csh => Chef::Provider::Script,
-            :user => Chef::Provider::User::Useradd,
-            :group => Chef::Provider::Group::Gpasswd,
-            :http_request => Chef::Provider::HttpRequest,
-            :route => Chef::Provider::Route,
-            :ifconfig => Chef::Provider::Ifconfig,
-            :ruby_block => Chef::Provider::RubyBlock,
-            :erl_call => Chef::Provider::ErlCall,
-            :log => Chef::Provider::Log::ChefLog
           }
-        }
+        end
       end
 
       include Chef::Mixin::ParamsValidate
@@ -493,6 +521,8 @@ class Chef
             if platforms.has_key?(args[:platform])
               if platforms[args[:platform]].has_key?(:default)
                 platforms[args[:platform]][:default][args[:resource].to_sym] = args[:provider]
+              elsif args[:platform] == :default
+                platforms[:default][args[:resource].to_sym] = args[:provider]
               else
                 platforms[args[:platform]] = { :default => { args[:resource].to_sym => args[:provider] } }
               end

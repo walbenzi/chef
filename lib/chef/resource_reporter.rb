@@ -20,7 +20,7 @@
 #
 
 require 'uri'
-require 'chef/monkey_patches/securerandom'
+require 'securerandom'
 require 'chef/event_dispatch/base'
 
 class Chef
@@ -47,13 +47,23 @@ class Chef
         report
       end
 
+      # Future: Some resources store state information that does not convert nicely
+      # to json. We can't call a resource's state method here, since there are conflicts
+      # with some LWRPs, so we can't override a resource's state method to return
+      # json-friendly state data.
+      #
+      # The registry key resource returns json-friendly state data through its state
+      # attribute, and uses a read-only variable for fetching true state data. If
+      # we have conflicts with other resources reporting json incompatible state, we
+      # may want to extend the state_attrs API with the ability to rename POST'd
+      # attrs.
       def for_json
         as_hash = {}
         as_hash["type"]   = new_resource.class.dsl_name
-        as_hash["name"]   = new_resource.name
-        as_hash["id"]     = new_resource.identity
-        as_hash["after"]  = new_resource.state
-        as_hash["before"] = current_resource ? current_resource.state : {}
+        as_hash["name"]   = new_resource.name.to_s
+        as_hash["id"]     = new_resource.identity.to_s
+        as_hash["after"]  = state(new_resource)
+        as_hash["before"] = current_resource ? state(current_resource) : {}
         as_hash["duration"] = (elapsed_time * 1000).to_i.to_s
         as_hash["delta"]  = new_resource.diff if new_resource.respond_to?("diff")
         as_hash["delta"]  = "" if as_hash["delta"].nil?
@@ -80,6 +90,12 @@ class Chef
         !self.exception
       end
 
+      def state(r)
+        r.class.state_attrs.inject({}) do |state_attrs, attr_name|
+          state_attrs[attr_name] = r.send(attr_name)
+          state_attrs
+        end
+      end
     end # End class ResouceReport
 
     attr_reader :updated_resources
@@ -101,7 +117,6 @@ class Chef
       @pending_update  = nil
       @status = "success"
       @exception = nil
-      @run_id = SecureRandom.uuid
       @rest_client = rest_client
       @error_descriptions = {}
     end
@@ -112,7 +127,7 @@ class Chef
       if reporting_enabled?
         begin
           resource_history_url = "reports/nodes/#{node_name}/runs"
-          server_response = @rest_client.post_rest(resource_history_url, {:action => :start, :run_id => @run_id,
+          server_response = @rest_client.post_rest(resource_history_url, {:action => :start, :run_id => run_id,
                                                                           :start_time => start_time.to_s}, headers)
         rescue Timeout::Error, Errno::EINVAL, Errno::ECONNRESET, EOFError, Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, Net::ProtocolError => e
           handle_error_starting_run(e, resource_history_url)
@@ -150,6 +165,10 @@ class Chef
       end
 
       @reporting_enabled = false
+    end
+
+    def run_id
+      @run_status.run_id
     end
 
     def resource_current_state_loaded(new_resource, action, current_resource)
@@ -208,21 +227,21 @@ class Chef
     def post_reporting_data
       if reporting_enabled?
         run_data = prepare_run_data
-        resource_history_url = "reports/nodes/#{node_name}/runs/#{@run_id}"
-        Chef::Log.info("Sending resource update report (run-id: #{@run_id})")
+        resource_history_url = "reports/nodes/#{node_name}/runs/#{run_id}"
+        Chef::Log.info("Sending resource update report (run-id: #{run_id})")
         Chef::Log.debug run_data.inspect
-        compressed_data = encode_gzip(run_data.to_json)
+        compressed_data = encode_gzip(Chef::JSONCompat.to_json(run_data))
+        Chef::Log.debug("Sending compressed run data...")
+        # Since we're posting compressed data we can not directly call post_rest which expects JSON
+        reporting_url = @rest_client.create_url(resource_history_url)
         begin
-          Chef::Log.debug("Sending compressed run data...")
-          # Since we're posting compressed data we can not directly call post_rest which expects JSON
-          reporting_url = @rest_client.create_url(resource_history_url)
           @rest_client.raw_http_request(:POST, reporting_url, headers({'Content-Encoding' => 'gzip'}), compressed_data)
-        rescue Net::HTTPServerException => e
-          if e.response.code.to_s == "400"
+        rescue StandardError => e
+          if e.respond_to? :response
             Chef::FileCache.store("failed-reporting-data.json", Chef::JSONCompat.to_json_pretty(run_data), 0640)
-            Chef::Log.error("Failed to post reporting data to server (HTTP 400), saving to #{Chef::FileCache.load("failed-reporting-data.json", false)}")
+            Chef::Log.error("Failed to post reporting data to server (HTTP #{e.response.code}), saving to #{Chef::FileCache.load("failed-reporting-data.json", false)}")
           else
-            Chef::Log.error("Failed to post reporting data to server (HTTP #{e.response.code.to_s})")
+            Chef::Log.error("Failed to post reporting data to server (#{e})")
           end
         end
       else
@@ -254,7 +273,7 @@ class Chef
         resource_record.for_json
       end
       run_data["status"] = @status
-      run_data["run_list"] = @run_status.node.run_list.to_json
+      run_data["run_list"] = Chef::JSONCompat.to_json(@run_status.node.run_list)
       run_data["total_res_count"] = @total_res_count.to_s
       run_data["data"] = {}
       run_data["start_time"] = start_time.to_s
@@ -264,7 +283,7 @@ class Chef
         exception_data = {}
         exception_data["class"] = exception.inspect
         exception_data["message"] = exception.message
-        exception_data["backtrace"] = exception.backtrace.to_json
+        exception_data["backtrace"] = Chef::JSONCompat.to_json(exception.backtrace)
         exception_data["description"] =  @error_descriptions
         run_data["data"]["exception"] = exception_data
       end

@@ -16,8 +16,8 @@
 # limitations under the License.
 #
 
-require 'chef/mixin/shell_out'
 require 'chef/provider/service'
+require 'chef/resource/service'
 require 'chef/mixin/command'
 
 class Chef
@@ -25,7 +25,9 @@ class Chef
     class Service
       class Simple < Chef::Provider::Service
 
-        include Chef::Mixin::ShellOut
+        # this must be subclassed to be useful so does not directly implement :service
+
+        attr_reader :status_load_success
 
         def load_current_resource
           @current_resource = Chef::Resource::Service.new(@new_resource.name)
@@ -85,16 +87,16 @@ class Chef
         end
 
         def start_service
-          shell_out!(@new_resource.start_command)
+          shell_out_with_systems_locale!(@new_resource.start_command)
         end
 
         def stop_service
-          shell_out!(@new_resource.stop_command)
+          shell_out_with_systems_locale!(@new_resource.stop_command)
         end
 
         def restart_service
           if @new_resource.restart_command
-            shell_out!(@new_resource.restart_command)
+            shell_out_with_systems_locale!(@new_resource.restart_command)
           else
             stop_service
             sleep 1
@@ -103,7 +105,7 @@ class Chef
         end
 
         def reload_service
-          shell_out!(@new_resource.reload_command)
+          shell_out_with_systems_locale!(@new_resource.reload_command)
         end
 
       protected

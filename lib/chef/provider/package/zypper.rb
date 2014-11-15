@@ -22,15 +22,12 @@
 require 'chef/provider/package'
 require 'chef/mixin/command'
 require 'chef/resource/package'
-require 'chef/mixin/shell_out'
 require 'singleton'
 
 class Chef
   class Provider
     class Package
       class Zypper < Chef::Provider::Package
-
-        include Chef::Mixin::ShellOut
 
         def load_current_resource
           @current_resource = Chef::Resource::Package.new(@new_resource.name)
@@ -106,7 +103,7 @@ class Chef
 
         private
         def zypper_package(command, pkgname, version)
-          version = "=#{version}" unless version.empty?
+          version = "=#{version}" unless version.nil? || version.empty?
           if zypper_version < 1.0
             shell_out!("zypper#{gpg_checks} #{command} -y #{pkgname}")
           else

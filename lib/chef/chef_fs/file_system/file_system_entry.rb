@@ -18,8 +18,9 @@
 
 require 'chef/chef_fs/file_system/base_fs_dir'
 require 'chef/chef_fs/file_system/rest_list_dir'
-require 'chef/chef_fs/file_system/not_found_error'
+require 'chef/chef_fs/file_system/already_exists_error'
 require 'chef/chef_fs/file_system/must_delete_recursively_error'
+require 'chef/chef_fs/file_system/not_found_error'
 require 'chef/chef_fs/path_utils'
 require 'fileutils'
 
@@ -40,20 +41,26 @@ class Chef
 
         def children
           begin
-            Dir.entries(file_path).sort.select { |entry| entry != '.' && entry != '..' }.map { |entry| FileSystemEntry.new(entry, self) }
+            Dir.entries(file_path).sort.select { |entry| entry != '.' && entry != '..' }.map { |entry| make_child(entry) }
           rescue Errno::ENOENT
             raise Chef::ChefFS::FileSystem::NotFoundError.new(self, $!)
           end
         end
 
         def create_child(child_name, file_contents=nil)
-          child = FileSystemEntry.new(child_name, self)
+          child = make_child(child_name)
+          if child.exists?
+            raise Chef::ChefFS::FileSystem::AlreadyExistsError.new(:create_child, child)
+          end
           if file_contents
             child.write(file_contents)
           else
-            Dir.mkdir(child.file_path)
+            begin
+              Dir.mkdir(child.file_path)
+            rescue Errno::EEXIST
+              raise Chef::ChefFS::FileSystem::AlreadyExistsError.new(:create_child, child)
+            end
           end
-          @children = nil
           child
         end
 
@@ -72,6 +79,10 @@ class Chef
           end
         end
 
+        def exists?
+          File.exists?(file_path)
+        end
+
         def read
           begin
             File.open(file_path, "rb") {|f| f.read}
@@ -84,6 +95,12 @@ class Chef
           File.open(file_path, 'wb') do |file|
             file.write(content)
           end
+        end
+
+        protected
+
+        def make_child(child_name)
+          FileSystemEntry.new(child_name, self)
         end
       end
     end

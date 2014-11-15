@@ -72,7 +72,13 @@ describe Chef::Exceptions do
 
   exception_to_super_class.each do |exception, expected_super_class|
     it "should have an exception class of #{exception} which inherits from #{expected_super_class}" do
-      lambda{ raise exception }.should raise_error(expected_super_class)
+      expect{ raise exception }.to raise_error(expected_super_class)
+    end
+
+    if exception.methods.include?(:to_json)
+      include_examples "to_json equalivent to Chef::JSONCompat.to_json" do
+        let(:jsonable) { exception }
+      end
     end
   end
 end

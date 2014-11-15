@@ -20,8 +20,21 @@ binstubs/
 # RVM and RBENV ruby version files
 .rbenv-version
 .rvmrc
+.ruby-version
+.ruby-gemset
+
+# IDE files
+.project
 
 # Documentation
 _site/*
 .yardoc/
 doc/
+
+# Test Kitchen
+.kitchen/
+Berksfile.lock
+
+# Vagrant
+Vagrantfile
+.vagrant/

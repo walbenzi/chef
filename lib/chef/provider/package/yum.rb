@@ -24,11 +24,12 @@ require 'chef/resource/package'
 require 'singleton'
 require 'chef/mixin/get_source_from_package'
 
-
 class Chef
   class Provider
     class Package
       class Yum < Chef::Provider::Package
+
+        provides :yum_package, os: "linux"
 
         class RPMUtils
           class << self
@@ -704,6 +705,8 @@ class Chef
               opts << " #{@extra_repo_control}"
             end
 
+            opts << " --yum-lock-timeout #{Chef::Config[:yum_lock_timeout]}"
+
             one_line = false
             error = nil
 
@@ -947,7 +950,6 @@ class Chef
         end # YumCache
 
         include Chef::Mixin::GetSourceFromPackage
-        include Chef::Mixin::ShellOut
 
         def initialize(new_resource, run_context)
           super

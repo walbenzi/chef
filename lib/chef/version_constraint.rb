@@ -21,7 +21,7 @@ class Chef
     DEFAULT_CONSTRAINT = ">= 0.0.0"
     STANDARD_OPS = %w(< > <= >=)
     OPS = %w(< > = <= >= ~>)
-    PATTERN = /^(#{OPS.join('|')}) (.+)$/
+    PATTERN = /^(#{OPS.join('|')}) *([0-9].*)$/
     VERSION_CLASS = Chef::Version
 
     attr_reader :op, :version
@@ -50,11 +50,11 @@ class Chef
     end
 
     def inspect
-      "(#{@op} #{@version})"
+      "(#{to_s})"
     end
 
     def to_s
-      "#{@op} #{@version}"
+      "#{@op} #{@raw_version}"
     end
 
     def eql?(o)
@@ -99,13 +99,14 @@ class Chef
       @missing_patch_level = false
       if str.index(" ").nil? && str =~ /^[0-9]/
         # try for lone version, implied '='
-        @version = self.class::VERSION_CLASS.new(str)
+        @raw_version = str
+        @version = self.class::VERSION_CLASS.new(@raw_version)
         @op = "="
       elsif PATTERN.match str
         @op = $1
-        raw_version = $2
-        @version = self.class::VERSION_CLASS.new(raw_version)
-        if raw_version.split('.').size <= 2
+        @raw_version = $2
+        @version = self.class::VERSION_CLASS.new(@raw_version)
+        if @raw_version.split('.').size <= 2
           @missing_patch_level = true
         end
       else

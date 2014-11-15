@@ -5,6 +5,8 @@ class Chef
     class Deps < Chef::ChefFS::Knife
       banner "knife deps PATTERN1 [PATTERNn]"
 
+      category "path-based"
+
       deps do
         require 'chef/chef_fs/file_system'
         require 'chef/run_list'
@@ -75,7 +77,7 @@ class Chef
             return entry.chef_object.metadata.dependencies.keys.map { |cookbook| "/cookbooks/#{cookbook}" }
 
           elsif entry.parent && entry.parent.path == '/nodes'
-            node = JSON.parse(entry.read, :create_additions => false)
+            node = Chef::JSONCompat.parse(entry.read)
             result = []
             if node['chef_environment'] && node['chef_environment'] != '_default'
               result << "/environments/#{node['chef_environment']}.json"
@@ -86,7 +88,7 @@ class Chef
             result
 
           elsif entry.parent && entry.parent.path == '/roles'
-            role = JSON.parse(entry.read, :create_additions => false)
+            role = Chef::JSONCompat.parse(entry.read)
             result = []
             if role['run_list']
               dependencies_from_runlist(role['run_list']).each do |dependency|
@@ -136,4 +138,3 @@ class Chef
     end
   end
 end
-

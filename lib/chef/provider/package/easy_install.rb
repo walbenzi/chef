@@ -18,16 +18,14 @@
 
 require 'chef/provider/package'
 require 'chef/mixin/command'
-require 'chef/mixin/shell_out'
 require 'chef/resource/package'
-require 'chef/mixin/shell_out'
 
 class Chef
   class Provider
     class Package
       class EasyInstall < Chef::Provider::Package
 
-        include Chef::Mixin::ShellOut
+        provides :easy_install_package
 
         def install_check(name)
           check = false

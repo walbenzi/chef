@@ -34,6 +34,7 @@ require 'chef/node/attribute'
 require 'chef/mash'
 require 'chef/json_compat'
 require 'chef/search/query'
+require 'chef/whitelist'
 
 class Chef
   class Node
@@ -41,8 +42,10 @@ class Chef
     extend Forwardable
 
     def_delegators :attributes, :keys, :each_key, :each_value, :key?, :has_key?
+    def_delegators :attributes, :rm, :rm_default, :rm_normal, :rm_override
+    def_delegators :attributes, :default!, :normal!, :override!, :force_default!, :force_override!
 
-    attr_accessor :recipe_list, :run_state, :run_list
+    attr_accessor :recipe_list, :run_state, :override_runlist
 
     # RunContext will set itself as run_context via this setter when
     # initialized. This is needed so DSL::IncludeAttribute (in particular,
@@ -63,7 +66,8 @@ class Chef
       @name = nil
 
       @chef_environment = '_default'
-      @run_list = Chef::RunList.new
+      @primary_runlist = Chef::RunList.new
+      @override_runlist = Chef::RunList.new
 
       @attributes = Chef::Node::Attribute.new({}, {}, {}, {})
 
@@ -144,13 +148,6 @@ class Chef
       attributes.default
     end
 
-    # Set a force default attribute. Intermediate mashes will be created by
-    # auto-vivify if necessary.
-    def default!
-      attributes.set_unless_value_present = false
-      attributes.default!
-    end
-
     # Set a default attribute of this node, auto-vivifying any mashes that are
     # missing, but if the final value already exists, don't set it
     def default_unless
@@ -165,20 +162,12 @@ class Chef
       attributes.override
     end
 
-    # Set a force override attribute. Intermediate mashes will be created by
-    # auto-vivify if needed.
-    def override!
-      attributes.set_unless_value_present = false
-      attributes.override!
-    end
-
     # Set an override attribute of this node, auto-vivifying any mashes that
     # are missing, but if the final value already exists, don't set it
     def override_unless
       attributes.set_unless_value_present = true
       attributes.override
     end
-
 
     def override_attrs
      attributes.override
@@ -247,15 +236,40 @@ class Chef
       run_list.include?(recipe_name) || Array(self[:recipes]).include?(recipe_name)
     end
 
+    # used by include_recipe to add recipes to the expanded run_list to be
+    # saved back to the node and be searchable
+    def loaded_recipe(cookbook, recipe)
+      fully_qualified_recipe = "#{cookbook}::#{recipe}"
+      automatic_attrs[:recipes] << fully_qualified_recipe unless Array(self[:recipes]).include?(fully_qualified_recipe)
+    end
+
     # Returns true if this Node expects a given role, false if not.
     def role?(role_name)
       run_list.include?("role[#{role_name}]")
     end
 
+    def primary_runlist
+      @primary_runlist
+    end
+
+    def override_runlist(*args)
+      args.length > 0 ? @override_runlist.reset!(args) : @override_runlist
+    end
+
+    def select_run_list
+      @override_runlist.empty? ? @primary_runlist : @override_runlist
+    end
+
     # Returns an Array of roles and recipes, in the order they will be applied.
     # If you call it with arguments, they will become the new list of roles and recipes.
     def run_list(*args)
-      args.length > 0 ? @run_list.reset!(args) : @run_list
+      rl = select_run_list
+      args.length > 0 ? rl.reset!(args) : rl
+    end
+
+    def run_list=(list)
+      rl = select_run_list
+      rl = list
     end
 
     # Returns true if this Node expects a given role, false if not.
@@ -305,7 +319,7 @@ class Chef
         if attrs.key?("recipes") || attrs.key?("run_list")
           raise Chef::Exceptions::AmbiguousRunlistSpecification, "please set the node's run list using the 'run_list' attribute only."
         end
-        Chef::Log.info("Setting the run_list to #{new_run_list.inspect} from JSON")
+        Chef::Log.info("Setting the run_list to #{new_run_list.inspect} from CLI options")
         run_list(new_run_list)
       end
       attrs
@@ -371,7 +385,7 @@ class Chef
       end
       index_hash["recipe"] = run_list.recipe_names if run_list.recipe_names.length > 0
       index_hash["role"] = run_list.role_names if run_list.role_names.length > 0
-      index_hash["run_list"] = run_list.run_list if run_list.run_list.length > 0
+      index_hash["run_list"] = run_list.run_list_items
       index_hash
     end
 
@@ -383,13 +397,13 @@ class Chef
       display["normal"]           = normal_attrs
       display["default"]          = attributes.combined_default
       display["override"]         = attributes.combined_override
-      display["run_list"]         = run_list.run_list
+      display["run_list"]         = run_list.run_list_items
       display
     end
 
     # Serialize this object as a hash
     def to_json(*a)
-      for_json.to_json(*a)
+      Chef::JSONCompat.to_json(for_json, *a)
     end
 
     def for_json
@@ -403,7 +417,7 @@ class Chef
         "default" => attributes.combined_default,
         "override" => attributes.combined_override,
         #Render correctly for run_list items so malformed json does not result
-        "run_list" => run_list.run_list.map { |item| item.to_s }
+        "run_list" => @primary_runlist.run_list.map { |item| item.to_s }
       }
       result
     end
@@ -472,7 +486,7 @@ class Chef
     def self.build(node_name)
       node = new
       node.name(node_name)
-      node.chef_environment(Chef::Config[:environment]) unless Chef::Config[:environment].nil? || Chef::Config[:environment].chop.empty?
+      node.chef_environment(Chef::Config[:environment]) unless Chef::Config[:environment].nil? || Chef::Config[:environment].chomp.empty?
       node
     end
 
@@ -494,18 +508,18 @@ class Chef
         if Chef::Config[:why_run]
           Chef::Log.warn("In whyrun mode, so NOT performing node save.")
         else
-          chef_server_rest.put_rest("nodes/#{name}", self)
+          chef_server_rest.put_rest("nodes/#{name}", data_for_save)
         end
       rescue Net::HTTPServerException => e
         raise e unless e.response.code == "404"
-        chef_server_rest.post_rest("nodes", self)
+        chef_server_rest.post_rest("nodes", data_for_save)
       end
       self
     end
 
     # Create the node via the REST API
     def create
-      chef_server_rest.post_rest("nodes", self)
+      chef_server_rest.post_rest("nodes", data_for_save)
       self
     end
 
@@ -515,6 +529,21 @@ class Chef
 
     def <=>(other_node)
       self.name <=> other_node.name
+    end
+
+    private
+
+    def data_for_save
+      data = for_json
+      ["automatic", "default", "normal", "override"].each do |level|
+        whitelist_config_option = "#{level}_attribute_whitelist".to_sym
+        whitelist = Chef::Config[whitelist_config_option]
+        unless whitelist.nil? # nil => save everything
+          Chef::Log.info("Whitelisting #{level} node attributes for save.")
+          data[level] = Chef::Whitelist.filter(data[level], whitelist)
+        end
+      end
+      data
     end
 
   end

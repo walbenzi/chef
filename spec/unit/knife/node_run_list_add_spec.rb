@@ -26,30 +26,30 @@ describe Chef::Knife::NodeRunListAdd do
       :after => nil
     }
     @knife.name_args = [ "adam", "role[monkey]" ]
-    @knife.stub!(:output).and_return(true)
+    allow(@knife).to receive(:output).and_return(true)
     @node = Chef::Node.new()
-    @node.stub!(:save).and_return(true)
-    Chef::Node.stub!(:load).and_return(@node)
+    allow(@node).to receive(:save).and_return(true)
+    allow(Chef::Node).to receive(:load).and_return(@node)
   end
 
   describe "run" do
     it "should load the node" do
-      Chef::Node.should_receive(:load).with("adam")
+      expect(Chef::Node).to receive(:load).with("adam")
       @knife.run
     end
 
     it "should add to the run list" do
       @knife.run
-      @node.run_list[0].should == 'role[monkey]'
+      expect(@node.run_list[0]).to eq('role[monkey]')
     end
 
     it "should save the node" do
-      @node.should_receive(:save)
+      expect(@node).to receive(:save)
       @knife.run
     end
 
     it "should print the run list" do
-      @knife.should_receive(:output).and_return(true)
+      expect(@knife).to receive(:output).and_return(true)
       @knife.run
     end
 
@@ -59,9 +59,32 @@ describe Chef::Knife::NodeRunListAdd do
         @node.run_list << "role[barn]"
         @knife.config[:after] = "role[acorns]"
         @knife.run
-        @node.run_list[0].should == "role[acorns]"
-        @node.run_list[1].should == "role[monkey]"
-        @node.run_list[2].should == "role[barn]"
+        expect(@node.run_list[0]).to eq("role[acorns]")
+        expect(@node.run_list[1]).to eq("role[monkey]")
+        expect(@node.run_list[2]).to eq("role[barn]")
+      end
+    end
+
+    describe "with -b or --before specified" do
+      it "should add to the run list before the specified entry" do
+        @node.run_list << "role[acorns]"
+        @node.run_list << "role[barn]"
+        @knife.config[:before] = "role[acorns]"
+        @knife.run
+        expect(@node.run_list[0]).to eq("role[monkey]")
+        expect(@node.run_list[1]).to eq("role[acorns]")
+        expect(@node.run_list[2]).to eq("role[barn]")
+      end
+    end
+
+    describe "with both --after and --before specified" do
+      it "exits with an error" do
+        @node.run_list << "role[acorns]"
+        @node.run_list << "role[barn]"
+        @knife.config[:before] = "role[acorns]"
+        @knife.config[:after]  = "role[acorns]"
+        expect(@knife.ui).to receive(:fatal)
+        expect { @knife.run }.to raise_error(SystemExit)
       end
     end
 
@@ -70,9 +93,9 @@ describe Chef::Knife::NodeRunListAdd do
         @knife.name_args = [ "adam", "role[monkey],role[duck]" ]
         @node.run_list << "role[acorns]"
         @knife.run
-        @node.run_list[0].should == "role[acorns]"
-        @node.run_list[1].should == "role[monkey]"
-        @node.run_list[2].should == "role[duck]"
+        expect(@node.run_list[0]).to eq("role[acorns]")
+        expect(@node.run_list[1]).to eq("role[monkey]")
+        expect(@node.run_list[2]).to eq("role[duck]")
       end
     end
 
@@ -81,9 +104,9 @@ describe Chef::Knife::NodeRunListAdd do
         @knife.name_args = [ "adam", "role[monkey], role[duck]" ]
         @node.run_list << "role[acorns]"
         @knife.run
-        @node.run_list[0].should == "role[acorns]"
-        @node.run_list[1].should == "role[monkey]"
-        @node.run_list[2].should == "role[duck]"
+        expect(@node.run_list[0]).to eq("role[acorns]")
+        expect(@node.run_list[1]).to eq("role[monkey]")
+        expect(@node.run_list[2]).to eq("role[duck]")
       end
     end
 
@@ -92,20 +115,20 @@ describe Chef::Knife::NodeRunListAdd do
         @knife.name_args = [ "adam", "role[monkey]", "role[duck]" ]
         @node.run_list << "role[acorns]"
         @knife.run
-        @node.run_list[0].should == "role[acorns]"
-        @node.run_list[1].should == "role[monkey]"
-        @node.run_list[2].should == "role[duck]"
+        expect(@node.run_list[0]).to eq("role[acorns]")
+        expect(@node.run_list[1]).to eq("role[monkey]")
+        expect(@node.run_list[2]).to eq("role[duck]")
       end
     end
 
-    describe "with more than one role or recipe as different arguments and list separated by comas" do
+    describe "with more than one role or recipe as different arguments and list separated by commas" do
       it "should add to the run list all the entries" do
         @knife.name_args = [ "adam", "role[monkey]", "role[duck],recipe[bird::fly]" ]
         @node.run_list << "role[acorns]"
         @knife.run
-        @node.run_list[0].should == "role[acorns]"
-        @node.run_list[1].should == "role[monkey]"
-        @node.run_list[2].should == "role[duck]"
+        expect(@node.run_list[0]).to eq("role[acorns]")
+        expect(@node.run_list[1]).to eq("role[monkey]")
+        expect(@node.run_list[2]).to eq("role[duck]")
       end
     end
 
@@ -114,8 +137,8 @@ describe Chef::Knife::NodeRunListAdd do
         @knife.name_args = [ "adam", "role[monkey]," ]
         @node.run_list << "role[acorns]"
         @knife.run
-        @node.run_list[0].should == "role[acorns]"
-        @node.run_list[1].should == "role[monkey]"
+        expect(@node.run_list[0]).to eq("role[acorns]")
+        expect(@node.run_list[1]).to eq("role[monkey]")
       end
     end
   end

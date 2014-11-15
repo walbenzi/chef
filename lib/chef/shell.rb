@@ -24,6 +24,7 @@ require 'chef'
 require 'chef/version'
 require 'chef/client'
 require 'chef/config'
+require 'chef/config_fetcher'
 
 require 'chef/shell/shell_session'
 require 'chef/shell/ext'
@@ -52,6 +53,7 @@ module Shell
     IRB::ExtendCommandBundle.instance_variable_get(:@ALIASES).delete(irb_help)
 
     parse_opts
+    Chef::Config[:shell_config] = options.config
 
     # HACK: this duplicates the functions of IRB.start, but we have to do it
     # to get access to the main object before irb starts.
@@ -110,6 +112,7 @@ module Shell
       conf.prompt_i       = "chef#{leader(m)} > "
       conf.prompt_n       = "chef#{leader(m)} ?> "
       conf.prompt_s       = "chef#{leader(m)}%l> "
+      conf.use_tracer     = false
     end
   end
 
@@ -151,26 +154,9 @@ module Shell
   end
 
   def self.parse_json
-    # HACK: copied verbatim from chef/application/client, because it's not
-    # reusable as written there :(
     if Chef::Config[:json_attribs]
-      begin
-        json_io = open(Chef::Config[:json_attribs])
-      rescue SocketError => error
-        fatal!("I cannot connect to #{Chef::Config[:json_attribs]}", 2)
-      rescue Errno::ENOENT => error
-        fatal!("I cannot find #{Chef::Config[:json_attribs]}", 2)
-      rescue Errno::EACCES => error
-        fatal!("Permissions are incorrect on #{Chef::Config[:json_attribs]}. Please chmod a+r #{Chef::Config[:json_attribs]}", 2)
-      rescue Exception => error
-        fatal!("Got an unexpected error reading #{Chef::Config[:json_attribs]}: #{error.message}", 2)
-      end
-
-      begin
-        @json_attribs = Chef::JSONCompat.from_json(json_io.read)
-      rescue JSON::ParserError => error
-        fatal!("Could not parse the provided JSON file (#{Chef::Config[:json_attribs]})!: " + error.message, 2)
-      end
+      config_fetcher = Chef::ConfigFetcher.new(Chef::Config[:json_attribs])
+      @json_attribs = config_fetcher.fetch_json
     end
   end
 
@@ -273,6 +259,12 @@ FOOTER
       :proc         => lambda {|v| puts "Chef: #{::Chef::VERSION}"},
       :exit         => 0
 
+    option :override_runlist,
+      :short        => "-o RunlistItem,RunlistItem...",
+      :long         => "--override-runlist RunlistItem,RunlistItem...",
+      :description  => "Replace current run list with specified items",
+      :proc         => lambda { |items| items.split(',').map { |item| Chef::RunList::RunListItem.new(item) }}
+
     def self.print_help
       instance = new
       instance.parse_options([])
@@ -316,9 +308,17 @@ FOOTER
       elsif ENV['HOME'] && ::File.exist?(File.join(ENV['HOME'], '.chef', 'chef_shell.rb'))
         File.join(ENV['HOME'], '.chef', 'chef_shell.rb')
       elsif config[:solo]
-        "/etc/chef/solo.rb"
+        if Chef::Platform.windows?
+          "C:\\chef\\solo.rb"
+        else
+          "/etc/chef/solo.rb"
+        end
       elsif config[:client]
-        "/etc/chef/client.rb"
+        if Chef::Platform.windows?
+          "C:\\chef\\client.rb"
+        else
+          "/etc/chef/client.rb"
+        end
       else
         nil
       end

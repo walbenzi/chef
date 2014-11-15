@@ -17,6 +17,7 @@
 #
 
 require 'chef/mixin/shell_out'
+require 'chef/guard_interpreter/resource_guard_interpreter'
 
 class Chef
   class Resource
@@ -29,12 +30,12 @@ class Chef
         private :new
       end
 
-      def self.not_if(command=nil, command_opts={}, &block)
-        new(:not_if, command, command_opts, &block)
+      def self.not_if(parent_resource, command=nil, command_opts={}, &block)
+        new(:not_if, parent_resource, command, command_opts, &block)
       end
 
-      def self.only_if(command=nil, command_opts={}, &block)
-        new(:only_if, command, command_opts, &block)
+      def self.only_if(parent_resource, command=nil, command_opts={}, &block)
+        new(:only_if, parent_resource, command, command_opts, &block)
       end
 
       attr_reader :positivity
@@ -42,22 +43,44 @@ class Chef
       attr_reader :command_opts
       attr_reader :block
 
-      def initialize(positivity, command=nil, command_opts={}, &block)
+      def initialize(positivity, parent_resource, command=nil, command_opts={}, &block)
         @positivity = positivity
-        case command
+        @command, @command_opts = command, command_opts
+        @block = block
+        @block_given = block_given?
+        @parent_resource = parent_resource
+
+        raise ArgumentError, "only_if/not_if requires either a command or a block" unless command || block_given?
+      end
+
+      def configure
+        case @command
         when String
-          @command, @command_opts = command, command_opts
+          @guard_interpreter = new_guard_interpreter(@parent_resource, @command, @command_opts, &@block)
           @block = nil
         when nil
-          raise ArgumentError, "only_if/not_if requires either a command or a block" unless block_given?
+          # We should have a block if we get here
+          # Check to see if the user set the guard_interpreter on the parent resource. Note that
+          # this error will not be raised when using the default_guard_interpreter
+          if @parent_resource.guard_interpreter != @parent_resource.default_guard_interpreter
+            msg = "#{@parent_resource.name} was given a guard_interpreter of #{@parent_resource.guard_interpreter}, "
+            msg << "but not given a command as a string. guard_interpreter does not support blocks (because they just contain ruby)."
+            raise ArgumentError, msg
+          end
+
+          @guard_interpreter = nil
           @command, @command_opts = nil, nil
-          @block = block
         else
-          raise ArgumentError, "Invalid only_if/not_if command: #{command.inspect} (#{command.class})"
+          # command was passed, but it wasn't a String
+          raise ArgumentError, "Invalid only_if/not_if command, expected a string: #{command.inspect} (#{command.class})"
         end
       end
 
+      # this is run during convergence via Chef::Resource#run_action -> Chef::Resource#should_skip?
       def continue?
+        # configure late in case guard_interpreter is specified on the resource after the conditional
+        configure
+
         case @positivity
         when :only_if
           evaluate
@@ -69,11 +92,11 @@ class Chef
       end
 
       def evaluate
-        @command ? evaluate_command : evaluate_block
+        @guard_interpreter ? evaluate_command : evaluate_block
       end
 
       def evaluate_command
-        shell_out(@command, @command_opts).status.success?
+        @guard_interpreter.evaluate
       rescue Chef::Exceptions::CommandTimeout
         Chef::Log.warn "Command '#{@command}' timed out"
         false
@@ -97,6 +120,16 @@ class Chef
           "#{positivity} \"#{@command}\""
         else
           "#{@positivity} { #code block }"
+        end
+      end
+
+      private
+
+      def new_guard_interpreter(parent_resource, command, opts)
+        if parent_resource.guard_interpreter == :default
+          guard_interpreter = Chef::GuardInterpreter::DefaultGuardInterpreter.new(command, opts)
+        else
+          guard_interpreter = Chef::GuardInterpreter::ResourceGuardInterpreter.new(parent_resource, command, opts)
         end
       end
 

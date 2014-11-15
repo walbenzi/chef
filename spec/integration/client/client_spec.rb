@@ -2,11 +2,24 @@ require 'support/shared/integration/integration_helper'
 require 'chef/mixin/shell_out'
 
 describe "chef-client" do
-  extend IntegrationSupport
+  include IntegrationSupport
   include Chef::Mixin::ShellOut
 
+  let(:chef_dir) { File.join(File.dirname(__FILE__), "..", "..", "..", "bin") }
+
+  # Invoke `chef-client` as `ruby PATH/TO/chef-client`. This ensures the
+  # following constraints are satisfied:
+  # * Windows: windows can only run batch scripts as bare executables. Rubygems
+  # creates batch wrappers for installed gems, but we don't have batch wrappers
+  # in the source tree.
+  # * Other `chef-client` in PATH: A common case is running the tests on a
+  # machine that has omnibus chef installed. In that case we need to ensure
+  # we're running `chef-client` from the source tree and not the external one.
+  # cf. CHEF-4914
+  let(:chef_client) { "ruby '#{chef_dir}/chef-client'" }
+
   when_the_repository "has a cookbook with a no-op recipe" do
-    file 'cookbooks/x/recipes/default.rb', ''
+    before { file 'cookbooks/x/recipes/default.rb', '' }
 
     it "should complete with success" do
       file 'config/client.rb', <<EOM
@@ -14,34 +27,36 @@ local_mode true
 cookbook_path "#{path_to('cookbooks')}"
 EOM
 
-      chef_dir = File.join(File.dirname(__FILE__), "..", "..", "..", "bin")
-      result = shell_out("chef-client -c \"#{path_to('config/client.rb')}\" -o 'x::default'", :cwd => chef_dir)
+      result = shell_out("#{chef_client} -c \"#{path_to('config/client.rb')}\" -o 'x::default'", :cwd => chef_dir)
       result.error!
     end
 
-    it 'should complete with success when cwd is just above cookbooks and paths are not specified' do
-      chef_dir = File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "bin"))
-      result = shell_out("#{chef_dir}/chef-client -z -o 'x::default'", :cwd => path_to(''))
-      result.error!
+    context 'and no config file' do
+      it 'should complete with success when cwd is just above cookbooks and paths are not specified' do
+        result = shell_out("#{chef_client} -z -o 'x::default' --disable-config", :cwd => path_to(''))
+        result.error!
+      end
+
+      it 'should complete with success when cwd is below cookbooks and paths are not specified' do
+        result = shell_out("#{chef_client} -z -o 'x::default' --disable-config", :cwd => path_to('cookbooks/x'))
+        result.error!
+      end
+
+      it 'should fail when cwd is below high above and paths are not specified' do
+        result = shell_out("#{chef_client} -z -o 'x::default' --disable-config", :cwd => File.expand_path('..', path_to('')))
+        expect(result.exitstatus).to eq(1)
+      end
     end
 
-    it 'should complete with success when cwd is below cookbooks and paths are not specified' do
-      chef_dir = File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "bin"))
-      result = shell_out("#{chef_dir}/chef-client -z -o 'x::default'", :cwd => path_to('cookbooks/x'))
-      result.error!
-    end
+    context 'and a config file under .chef/knife.rb' do
+      before { file '.chef/knife.rb', 'xxx.xxx' }
 
-    it 'should fail when cwd is below high above and paths are not specified' do
-      chef_dir = File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "bin"))
-      result = shell_out("#{chef_dir}/chef-client -z -o 'x::default'", :cwd => File.expand_path('..', path_to('')))
-      result.exitstatus.should == 1
-    end
+      it 'should load .chef/knife.rb when -z is specified' do
+        result = shell_out("#{chef_client} -z -o 'x::default'", :cwd => path_to(''))
+        # FATAL: Configuration error NoMethodError: undefined method `xxx' for nil:NilClass
+        expect(result.stdout).to include("xxx")
+      end
 
-    it 'should load .chef/knife.rb when -z is specified' do
-      file '.chef/knife.rb', 'xxx.xxx'
-      chef_dir = File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "bin"))
-      result = shell_out("#{chef_dir}/chef-client -z -o 'x::default'", :cwd => path_to(''))
-      result.exitstatus.should == 2
     end
 
     it "should complete with success" do
@@ -50,13 +65,13 @@ local_mode true
 cookbook_path "#{path_to('cookbooks')}"
 EOM
 
-      chef_dir = File.join(File.dirname(__FILE__), "..", "..", "..", "bin")
-      result = shell_out("chef-client -c \"#{path_to('config/client.rb')}\" -o 'x::default'", :cwd => chef_dir)
+      result = shell_out("#{chef_client} -c \"#{path_to('config/client.rb')}\" -o 'x::default'", :cwd => chef_dir)
       result.error!
     end
 
     context 'and a private key' do
-      file 'mykey.pem', <<EOM
+      before do
+        file 'mykey.pem', <<EOM
 -----BEGIN RSA PRIVATE KEY-----
 MIIEogIBAAKCAQEApubutqtYYQ5UiA9QhWP7UvSmsfHsAoPKEVVPdVW/e8Svwpyf
 0Xef6OFWVmBE+W442ZjLOe2y6p2nSnaq4y7dg99NFz6X+16mcKiCbj0RCiGqCvCk
@@ -85,18 +100,88 @@ syHLXYFNy0OxMtH/bBAXBGNHd9gf5uOnqh0pYcbe/uRAxumC7Rl0cL509eURiA2T
 +vFmf54y9YdnLXaqv+FhJT6B6V7WX7IpU9BMqJY1cJYXHuHG2KA=
 -----END RSA PRIVATE KEY-----
 EOM
+      end
 
       it "should complete with success even with a client key" do
         file 'config/client.rb', <<EOM
 local_mode true
-client_key "#{path_to('mykey.pem')}"
-cookbook_path "#{path_to('cookbooks')}"
+client_key #{path_to('mykey.pem').inspect}
+cookbook_path #{path_to('cookbooks').inspect}
 EOM
 
-        chef_dir = File.join(File.dirname(__FILE__), "..", "..", "..", "bin")
-        result = shell_out("chef-client -c \"#{path_to('config/client.rb')}\" -o 'x::default'", :cwd => chef_dir)
+        result = shell_out("#{chef_client} -c \"#{path_to('config/client.rb')}\" -o 'x::default'", :cwd => chef_dir)
         result.error!
       end
+
+      it "should run recipes specified directly on the command line" do
+        file 'config/client.rb', <<EOM
+local_mode true
+client_key #{path_to('mykey.pem').inspect}
+cookbook_path #{path_to('cookbooks').inspect}
+EOM
+
+        file 'arbitrary.rb', <<EOM
+file #{path_to('tempfile.txt').inspect} do
+  content '1'
+end
+EOM
+
+        file 'arbitrary2.rb', <<EOM
+file #{path_to('tempfile2.txt').inspect} do
+  content '2'
+end
+EOM
+
+        result = shell_out("#{chef_client} -c \"#{path_to('config/client.rb')}\" #{path_to('arbitrary.rb')} #{path_to('arbitrary2.rb')}", :cwd => chef_dir)
+        result.error!
+
+        expect(IO.read(path_to('tempfile.txt'))).to eq('1')
+        expect(IO.read(path_to('tempfile2.txt'))).to eq('2')
+      end
+
+      it "should run recipes specified as relative paths directly on the command line" do
+        file 'config/client.rb', <<EOM
+local_mode true
+client_key #{path_to('mykey.pem').inspect}
+cookbook_path #{path_to('cookbooks').inspect}
+EOM
+
+        file 'arbitrary.rb', <<EOM
+file #{path_to('tempfile.txt').inspect} do
+  content '1'
+end
+EOM
+
+        result = shell_out("#{chef_client} -c \"#{path_to('config/client.rb')}\" arbitrary.rb", :cwd => path_to(''))
+        result.error!
+
+        expect(IO.read(path_to('tempfile.txt'))).to eq('1')
+      end
+
+      it "should run recipes specified directly on the command line AFTER recipes in the run list" do
+        file 'config/client.rb', <<EOM
+local_mode true
+client_key #{path_to('mykey.pem').inspect}
+cookbook_path #{path_to('cookbooks').inspect}
+EOM
+
+        file 'cookbooks/x/recipes/constant_definition.rb', <<EOM
+class ::Blah
+  THECONSTANT = '1'
+end
+EOM
+        file 'arbitrary.rb', <<EOM
+file #{path_to('tempfile.txt').inspect} do
+  content ::Blah::THECONSTANT
+end
+EOM
+
+        result = shell_out("#{chef_client} -c \"#{path_to('config/client.rb')}\" -o x::constant_definition arbitrary.rb", :cwd => path_to(''))
+        result.error!
+
+        expect(IO.read(path_to('tempfile.txt'))).to eq('1')
+      end
+
     end
 
     it "should complete with success when passed the -z flag" do
@@ -105,8 +190,7 @@ chef_server_url 'http://omg.com/blah'
 cookbook_path "#{path_to('cookbooks')}"
 EOM
 
-      chef_dir = File.join(File.dirname(__FILE__), "..", "..", "..", "bin")
-      result = shell_out("chef-client -c \"#{path_to('config/client.rb')}\" -o 'x::default' -z", :cwd => chef_dir)
+      result = shell_out("#{chef_client} -c \"#{path_to('config/client.rb')}\" -o 'x::default' -z", :cwd => chef_dir)
       result.error!
     end
 
@@ -116,8 +200,18 @@ chef_server_url 'http://omg.com/blah'
 cookbook_path "#{path_to('cookbooks')}"
 EOM
 
-      chef_dir = File.join(File.dirname(__FILE__), "..", "..", "..", "bin")
-      result = shell_out("chef-client -c \"#{path_to('config/client.rb')}\" -o 'x::default' --local-mode", :cwd => chef_dir)
+      result = shell_out("#{chef_client} -c \"#{path_to('config/client.rb')}\" -o 'x::default' --local-mode", :cwd => chef_dir)
+      result.error!
+    end
+
+    it "should not print SSL warnings when running in local-mode" do
+      file 'config/client.rb', <<EOM
+chef_server_url 'http://omg.com/blah'
+cookbook_path "#{path_to('cookbooks')}"
+EOM
+
+      result = shell_out("#{chef_client} -c \"#{path_to('config/client.rb')}\" -o 'x::default' --local-mode", :cwd => chef_dir)
+      expect(result.stdout).not_to include("SSL validation of HTTPS requests is disabled.")
       result.error!
     end
 
@@ -127,9 +221,22 @@ chef_server_url 'http://omg.com/blah'
 cookbook_path "#{path_to('cookbooks')}"
 EOM
 
-      chef_dir = File.join(File.dirname(__FILE__), "..", "..", "..", "bin")
-      result = shell_out("chef-client -c \"#{path_to('config/client.rb')}\" -o 'x::default' -z", :cwd => chef_dir)
+      result = shell_out("#{chef_client} -c \"#{path_to('config/client.rb')}\" -o 'x::default' -z", :cwd => chef_dir)
       result.error!
     end
+
+    it "should complete with success when setting the run list with -r" do
+      file 'config/client.rb', <<EOM
+chef_server_url 'http://omg.com/blah'
+cookbook_path "#{path_to('cookbooks')}"
+EOM
+
+      result = shell_out("#{chef_client} -c \"#{path_to('config/client.rb')}\" -r 'x::default' -z", :cwd => chef_dir)
+      expect(result.stdout).not_to include("Overridden Run List")
+      expect(result.stdout).to include("Run List is [recipe[x::default]]")
+      #puts result.stdout
+      result.error!
+    end
+
   end
 end

@@ -25,6 +25,8 @@ class Chef
     class Package
       class Rpm < Chef::Provider::Package
 
+        provides :rpm_package, os: [ "linux", "aix" ]
+
         include Chef::Mixin::GetSourceFromPackage
 
         def define_resource_requirements
@@ -60,9 +62,10 @@ class Chef
             status = popen4("rpm -qp --queryformat '%{NAME} %{VERSION}-%{RELEASE}\n' #{@new_resource.source}") do |pid, stdin, stdout, stderr|
               stdout.each do |line|
                 case line
-                when /([\w\d_.-]+)\s([\w\d_.-]+)/
+                when /^([\w\d+_.-]+)\s([\w\d_.-]+)$/
                   @current_resource.package_name($1)
                   @new_resource.version($2)
+                  @candidate_version = $2
                 end
               end
             end
@@ -77,26 +80,21 @@ class Chef
           @rpm_status = popen4("rpm -q --queryformat '%{NAME} %{VERSION}-%{RELEASE}\n' #{@current_resource.package_name}") do |pid, stdin, stdout, stderr|
             stdout.each do |line|
               case line
-              when /([\w\d_.-]+)\s([\w\d_.-]+)/
+              when /^([\w\d+_.-]+)\s([\w\d_.-]+)$/
                 Chef::Log.debug("#{@new_resource} current version is #{$2}")
                 @current_resource.version($2)
               end
             end
           end
 
-
           @current_resource
         end
 
         def install_package(name, version)
           unless @current_resource.version
-            run_command_with_systems_locale(
-              :command => "rpm #{@new_resource.options} -i #{@new_resource.source}"
-            )
+            shell_out!( "rpm #{@new_resource.options} -i #{@new_resource.source}" )
           else
-            run_command_with_systems_locale(
-              :command => "rpm #{@new_resource.options} -U #{@new_resource.source}"
-            )
+            shell_out!( "rpm #{@new_resource.options} -U #{@new_resource.source}" )
           end
         end
 
@@ -104,13 +102,9 @@ class Chef
 
         def remove_package(name, version)
           if version
-            run_command_with_systems_locale(
-              :command => "rpm #{@new_resource.options} -e #{name}-#{version}"
-            )
+            shell_out!( "rpm #{@new_resource.options} -e #{name}-#{version}" )
           else
-            run_command_with_systems_locale(
-              :command => "rpm #{@new_resource.options} -e #{name}"
-            )
+            shell_out!( "rpm #{@new_resource.options} -e #{name}" )
           end
         end
 
@@ -118,4 +112,3 @@ class Chef
     end
   end
 end
-

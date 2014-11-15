@@ -16,14 +16,22 @@
 # limitations under the License.
 #
 
-require 'chef/provider/service'
 require 'chef/provider/service/init'
-require 'chef/mixin/command'
 
 class Chef
   class Provider
     class Service
       class Invokercd < Chef::Provider::Service::Init
+
+        provides :service, platform_family: "debian"
+
+        def self.provides?(node, resource)
+          super && Chef::Platform::ServiceHelpers.service_resource_providers.include?(:invokercd)
+        end
+
+        def self.supports?(resource, action)
+          Chef::Platform::ServiceHelpers.config_for_service(resource.service_name).include?(:initd)
+        end
 
         def initialize(new_resource, run_context)
           super

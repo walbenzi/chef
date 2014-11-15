@@ -22,6 +22,7 @@
 #
 require 'uri'
 require 'net/http'
+require 'chef/http/ssl_policies'
 require 'chef/http/http_request'
 
 class Chef
@@ -32,14 +33,21 @@ class Chef
 
       attr_reader :url
       attr_reader :http_client
+      attr_reader :ssl_policy
 
-      def initialize(url)
+      # Instantiate a BasicClient.
+      # === Arguments:
+      # url:: An URI for the remote server.
+      # === Options:
+      # ssl_policy:: The SSL Policy to use, defaults to DefaultSSLPolicy
+      def initialize(url, opts={})
         @url = url
+        @ssl_policy = opts[:ssl_policy] || DefaultSSLPolicy
         @http_client = build_http_client
       end
 
       def host
-        @url.host
+        @url.hostname
       end
 
       def port
@@ -48,18 +56,55 @@ class Chef
 
       def request(method, url, req_body, base_headers={})
         http_request = HTTPRequest.new(method, url, req_body, base_headers).http_request
+        Chef::Log.debug("Initiating #{method} to #{url}")
+        Chef::Log.debug("---- HTTP Request Header Data: ----")
+        base_headers.each do |name, value|
+          Chef::Log.debug("#{name}: #{value}")
+        end
+        Chef::Log.debug("---- End HTTP Request Header Data ----")
         http_client.request(http_request) do |response|
+          Chef::Log.debug("---- HTTP Status and Header Data: ----")
+          Chef::Log.debug("HTTP #{response.http_version} #{response.code} #{response.msg}")
+
+          response.each do |header, value|
+            Chef::Log.debug("#{header}: #{value}")
+          end
+          Chef::Log.debug("---- End HTTP Status/Header Data ----")
+
+          # For non-400's, log the request and response bodies
+          if !response.code || !response.code.start_with?('2')
+            if response.body
+              Chef::Log.debug("---- HTTP Response Body ----")
+              Chef::Log.debug(response.body)
+              Chef::Log.debug("---- End HTTP Response Body -----")
+            end
+            if req_body
+              Chef::Log.debug("---- HTTP Request Body ----")
+              Chef::Log.debug(req_body)
+              Chef::Log.debug("---- End HTTP Request Body ----")
+            end
+          end
+
           yield response if block_given?
           # http_client.request may not have the return signature we want, so
           # force the issue:
           return [http_request, response]
         end
+      rescue OpenSSL::SSL::SSLError => e
+        Chef::Log.error("SSL Validation failure connecting to host: #{host} - #{e.message}")
+        raise
       end
 
       #adapted from buildr/lib/buildr/core/transports.rb
       def proxy_uri
         proxy = Chef::Config["#{url.scheme}_proxy"]
-        proxy = URI.parse(proxy) if String === proxy
+        # Check if the proxy string contains a scheme. If not, add the url's scheme to the
+        # proxy before parsing. The regex /^.*:\/\// matches, for example, http://.
+        proxy = if proxy.match(/^.*:\/\//)
+          URI.parse(proxy)
+        else
+          URI.parse("#{url.scheme}://#{proxy}")
+        end if String === proxy
         excludes = Chef::Config[:no_proxy].to_s.split(/\s*,\s*/).compact
         excludes = excludes.map { |exclude| exclude =~ /:\d+$/ ? exclude : "#{exclude}:*" }
         return proxy unless excludes.any? { |exclude| File.fnmatch(exclude, "#{host}:#{port}") }
@@ -73,6 +118,7 @@ class Chef
         end
 
         http_client.read_timeout = config[:rest_timeout]
+        http_client.open_timeout = config[:rest_timeout]
         http_client
       end
 
@@ -94,35 +140,7 @@ class Chef
 
       def configure_ssl(http_client)
         http_client.use_ssl = true
-        if config[:ssl_verify_mode] == :verify_none
-          http_client.verify_mode = OpenSSL::SSL::VERIFY_NONE
-        elsif config[:ssl_verify_mode] == :verify_peer
-          http_client.verify_mode = OpenSSL::SSL::VERIFY_PEER
-        end
-        if config[:ssl_ca_path]
-          unless ::File.exist?(config[:ssl_ca_path])
-            raise Chef::Exceptions::ConfigurationError, "The configured ssl_ca_path #{config[:ssl_ca_path]} does not exist"
-          end
-          http_client.ca_path = config[:ssl_ca_path]
-        elsif config[:ssl_ca_file]
-          unless ::File.exist?(config[:ssl_ca_file])
-            raise Chef::Exceptions::ConfigurationError, "The configured ssl_ca_file #{config[:ssl_ca_file]} does not exist"
-          end
-          http_client.ca_file = config[:ssl_ca_file]
-        end
-        if (config[:ssl_client_cert] || config[:ssl_client_key])
-          unless (config[:ssl_client_cert] && config[:ssl_client_key])
-            raise Chef::Exceptions::ConfigurationError, "You must configure ssl_client_cert and ssl_client_key together"
-          end
-          unless ::File.exists?(config[:ssl_client_cert])
-            raise Chef::Exceptions::ConfigurationError, "The configured ssl_client_cert #{config[:ssl_client_cert]} does not exist"
-          end
-          unless ::File.exists?(config[:ssl_client_key])
-            raise Chef::Exceptions::ConfigurationError, "The configured ssl_client_key #{config[:ssl_client_key]} does not exist"
-          end
-          http_client.cert = OpenSSL::X509::Certificate.new(::File.read(config[:ssl_client_cert]))
-          http_client.key = OpenSSL::PKey::RSA.new(::File.read(config[:ssl_client_key]))
-        end
+        ssl_policy.apply_to(http_client)
       end
 
     end

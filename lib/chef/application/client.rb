@@ -22,9 +22,9 @@ require 'chef/client'
 require 'chef/config'
 require 'chef/daemon'
 require 'chef/log'
-require 'chef/rest'
+require 'chef/config_fetcher'
 require 'chef/handler/error_report'
-
+require 'chef/workstation_config_loader'
 
 class Chef::Application::Client < Chef::Application
 
@@ -170,7 +170,7 @@ class Chef::Application::Client < Chef::Application
   option :override_runlist,
     :short        => "-o RunlistItem,RunlistItem...",
     :long         => "--override-runlist RunlistItem,RunlistItem...",
-    :description  => "Replace current run list with specified items",
+    :description  => "Replace current run list with specified items for a single run",
     :proc         => lambda{|items|
       items = items.split(',')
       items.compact.map{|item|
@@ -178,6 +178,16 @@ class Chef::Application::Client < Chef::Application
       }
     }
 
+  option :runlist,
+    :short        => "-r RunlistItem,RunlistItem...",
+    :long         => "--runlist RunlistItem,RunlistItem...",
+    :description  => "Permanently replace current run list with specified items",
+    :proc         => lambda{|items|
+      items = items.split(',')
+      items.compact.map{|item|
+        Chef::RunList::RunListItem.new(item)
+      }
+    }
   option :why_run,
     :short        => '-W',
     :long         => '--why-run',
@@ -202,9 +212,23 @@ class Chef::Application::Client < Chef::Application
     :description  => "Point chef-client at local repository",
     :boolean      => true
 
+  option :chef_zero_host,
+    :long         => "--chef-zero-host HOST",
+    :description  => "Host to start chef-zero on"
+
   option :chef_zero_port,
     :long         => "--chef-zero-port PORT",
-    :description  => "Port to start chef-zero on"
+    :description  => "Port (or port range) to start chef-zero on.  Port ranges like 1000,1010 or 8889-9999 will try all given ports until one works."
+
+  option :disable_config,
+    :long         => "--disable-config",
+    :description  => "Refuse to load a config file and use defaults. This is for development and not a stable API",
+    :boolean      => true
+
+  option :run_lock_timeout,
+    :long         => "--run-lock-timeout SECONDS",
+    :description  => "Set maximum duration to wait for another client run to finish, default is indefinitely.",
+    :proc         => lambda { |s| s.to_i }
 
   if Chef::Platform.windows?
     option :fatal_windows_admin_check,
@@ -214,17 +238,21 @@ class Chef::Application::Client < Chef::Application
       :boolean      => true
   end
 
-  attr_reader :chef_client_json
+  option :audit_mode,
+    :long           => "--[no-]audit-mode",
+    :description    => "If not specified, run converge and audit phase.  If true, run only audit phase.  If false, run only converge phase.",
+    :boolean        => true
 
-  def initialize
-    super
-    @exit_gracefully = false
-  end
+  IMMEDIATE_RUN_SIGNAL = "1".freeze
+
+  attr_reader :chef_client_json
 
   # Reconfigure the chef client
   # Re-open the JSON attributes and load them into the node
   def reconfigure
     super
+
+    Chef::Config[:specific_recipes] = cli_arguments.map { |file| File.expand_path(file) }
 
     Chef::Config[:chef_server_url] = config[:chef_server_url] if config.has_key? :chef_server_url
 
@@ -232,6 +260,7 @@ class Chef::Application::Client < Chef::Application
     if Chef::Config.local_mode && !Chef::Config.has_key?(:cookbook_path) && !Chef::Config.has_key?(:chef_repo_path)
       Chef::Config.chef_repo_path = Chef::Config.find_chef_repo_path(Dir.pwd)
     end
+    Chef::Config.chef_zero.host = config[:chef_zero_host] if config[:chef_zero_host]
     Chef::Config.chef_zero.port = config[:chef_zero_port] if config[:chef_zero_port]
 
     if Chef::Config[:daemonize]
@@ -243,39 +272,18 @@ class Chef::Application::Client < Chef::Application
       Chef::Config[:splay] = nil
     end
 
-    if Chef::Config[:json_attribs]
-      begin
-        json_io = case Chef::Config[:json_attribs]
-                  when /^(http|https):\/\//
-                    @rest = Chef::REST.new(Chef::Config[:json_attribs], nil, nil)
-                    @rest.get_rest(Chef::Config[:json_attribs], true).open
-                  else
-                    open(Chef::Config[:json_attribs])
-                  end
-      rescue SocketError => error
-        Chef::Application.fatal!("I cannot connect to #{Chef::Config[:json_attribs]}", 2)
-      rescue Errno::ENOENT => error
-        Chef::Application.fatal!("I cannot find #{Chef::Config[:json_attribs]}", 2)
-      rescue Errno::EACCES => error
-        Chef::Application.fatal!("Permissions are incorrect on #{Chef::Config[:json_attribs]}. Please chmod a+r #{Chef::Config[:json_attribs]}", 2)
-      rescue Exception => error
-        Chef::Application.fatal!("Got an unexpected error reading #{Chef::Config[:json_attribs]}: #{error.message}", 2)
-      end
+    Chef::Application.fatal!(unforked_interval_error_message) if !Chef::Config[:client_fork] && Chef::Config[:interval]
 
-      begin
-        @chef_client_json = Chef::JSONCompat.from_json(json_io.read)
-        json_io.close unless json_io.closed?
-      rescue JSON::ParserError => error
-        Chef::Application.fatal!("Could not parse the provided JSON file (#{Chef::Config[:json_attribs]})!: " + error.message, 2)
-      end
+    if Chef::Config[:json_attribs]
+      config_fetcher = Chef::ConfigFetcher.new(Chef::Config[:json_attribs])
+      @chef_client_json = config_fetcher.fetch_json
     end
   end
 
   def load_config_file
-    if !config.has_key?(:config_file)
+    if !config.has_key?(:config_file) && !config[:disable_config]
       if config[:local_mode]
-        require 'chef/knife'
-        config[:config_file] = Chef::Knife.locate_config_file
+        config[:config_file] = Chef::WorkstationConfigLoader.new(nil, Chef::Log).config_location
       else
         config[:config_file] = Chef::Config.platform_specific_path("/etc/chef/client.rb")
       end
@@ -293,63 +301,64 @@ class Chef::Application::Client < Chef::Application
     Chef::Daemon.change_privilege
   end
 
-  # Run the chef client, optionally daemonizing or looping at intervals.
-  def run_application
+  def setup_signal_handlers
+    super
+
     unless Chef::Platform.windows?
       SELF_PIPE.replace IO.pipe
 
       trap("USR1") do
         Chef::Log.info("SIGUSR1 received, waking up")
-        SELF_PIPE[1].putc('.') # wakeup master process from select
-      end
-
-      trap("TERM") do
-        Chef::Log.info("SIGTERM received, exiting gracefully")
-        @exit_gracefully = true
-        SELF_PIPE[1].putc('.')
+        SELF_PIPE[1].putc(IMMEDIATE_RUN_SIGNAL) # wakeup master process from select
       end
     end
+  end
 
+  # Run the chef client, optionally daemonizing or looping at intervals.
+  def run_application
     if Chef::Config[:version]
       puts "Chef version: #{::Chef::VERSION}"
     end
 
+    if !Chef::Config[:client_fork] || Chef::Config[:once]
+      begin
+        # run immediately without interval sleep, or splay
+        run_chef_client(Chef::Config[:specific_recipes])
+      rescue SystemExit
+        raise
+      rescue Exception => e
+        Chef::Application.fatal!("#{e.class}: #{e.message}", 1)
+      end
+    else
+      interval_run_chef_client
+    end
+  end
+
+  private
+  def interval_run_chef_client
     if Chef::Config[:daemonize]
       Chef::Daemon.daemonize("chef-client")
     end
 
     loop do
       begin
-        Chef::Application.exit!("Exiting", 0) if @exit_gracefully
-        if Chef::Config[:splay]
-          splay = rand Chef::Config[:splay]
-          Chef::Log.debug("Splay sleep #{splay} seconds")
-          sleep splay
+        @signal = test_signal
+        if @signal != IMMEDIATE_RUN_SIGNAL
+          sleep_sec = time_to_sleep
+          Chef::Log.debug("Sleeping for #{sleep_sec} seconds")
+          interval_sleep(sleep_sec)
         end
-        run_chef_client
-        if Chef::Config[:interval]
-          Chef::Log.debug("Sleeping for #{Chef::Config[:interval]} seconds")
-          unless SELF_PIPE.empty?
-            client_sleep Chef::Config[:interval]
-          else
-            # Windows
-            sleep Chef::Config[:interval]
-          end
-        else
-          Chef::Application.exit! "Exiting", 0
-        end
+
+        @signal = nil
+        run_chef_client(Chef::Config[:specific_recipes])
+
+        Chef::Application.exit!("Exiting", 0) if !Chef::Config[:interval]
       rescue SystemExit => e
         raise
       rescue Exception => e
         if Chef::Config[:interval]
           Chef::Log.error("#{e.class}: #{e}")
-          Chef::Log.error("Sleeping for #{Chef::Config[:interval]} seconds before trying again")
-          unless SELF_PIPE.empty?
-            client_sleep Chef::Config[:interval]
-          else
-            # Windows
-            sleep Chef::Config[:interval]
-          end
+          Chef::Log.debug("#{e.class}: #{e}\n#{e.backtrace.join("\n")}")
           retry
         else
           Chef::Application.fatal!("#{e.class}: #{e.message}", 1)
@@ -358,10 +367,35 @@ class Chef::Application::Client < Chef::Application
     end
   end
 
-  private
+  def test_signal
+    @signal = interval_sleep(0)
+  end
+
+  def time_to_sleep
+    duration = 0
+    duration += rand(Chef::Config[:splay]) if Chef::Config[:splay]
+    duration += Chef::Config[:interval] if Chef::Config[:interval]
+    duration
+  end
+
+  def interval_sleep(sec)
+    unless SELF_PIPE.empty?
+      client_sleep(sec)
+    else
+      # Windows
+      sleep(sec)
+    end
+  end
 
   def client_sleep(sec)
     IO.select([ SELF_PIPE[0] ], nil, nil, sec) or return
-    SELF_PIPE[0].getc
+    @signal = SELF_PIPE[0].getc.chr
+  end
+
+  def unforked_interval_error_message
+    "Unforked chef-client interval runs are disabled in Chef 12." +
+    "\nConfiguration settings:" +
+    "#{"\n  interval  = #{Chef::Config[:interval]} seconds" if Chef::Config[:interval]}" +
+    "\nEnable chef-client interval runs by setting `:client_fork = true` in your config file or adding `--fork` to your command line options."
   end
 end

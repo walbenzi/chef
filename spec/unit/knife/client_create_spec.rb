@@ -25,47 +25,75 @@ describe Chef::Knife::ClientCreate do
     Chef::Config[:node_name]  = "webmonkey.example.com"
     @knife = Chef::Knife::ClientCreate.new
     @knife.config = {
-      :file => nil
+      :file => nil,
+      :admin => false,
+      :validator => false
     }
     @knife.name_args = [ "adam" ]
     @client = Chef::ApiClient.new
-    @client.stub!(:save).and_return({ 'private_key' => '' })
-    @knife.stub!(:edit_data).and_return(@client)
-    @knife.stub!(:puts)
-    Chef::ApiClient.stub!(:new).and_return(@client)
-    @stdout = StringIO.new
-    @knife.ui.stub!(:stdout).and_return(@stdout)
+    allow(@client).to receive(:save).and_return({ 'private_key' => '' })
+    allow(@knife).to receive(:edit_data).and_return(@client)
+    allow(@knife).to receive(:puts)
+    allow(Chef::ApiClient).to receive(:new).and_return(@client)
+    @stderr = StringIO.new
+    allow(@knife.ui).to receive(:stderr).and_return(@stderr)
   end
 
   describe "run" do
     it "should create a new Client" do
-      Chef::ApiClient.should_receive(:new).and_return(@client)
+      expect(Chef::ApiClient).to receive(:new).and_return(@client)
       @knife.run
-      @stdout.string.should match /created client.+adam/i
+      expect(@stderr.string).to match /created client.+adam/i
     end
 
     it "should set the Client name" do
-      @client.should_receive(:name).with("adam")
+      expect(@client).to receive(:name).with("adam")
+      @knife.run
+    end
+
+    it "by default it is not an admin" do
+      expect(@client).to receive(:admin).with(false)
+      @knife.run
+    end
+
+    it "by default it is not a validator" do
+      expect(@client).to receive(:validator).with(false)
       @knife.run
     end
 
     it "should allow you to edit the data" do
-      @knife.should_receive(:edit_data).with(@client)
+      expect(@knife).to receive(:edit_data).with(@client)
       @knife.run
     end
 
     it "should save the Client" do
-      @client.should_receive(:save)
+      expect(@client).to receive(:save)
       @knife.run
     end
 
     describe "with -f or --file" do
       it "should write the private key to a file" do
         @knife.config[:file] = "/tmp/monkeypants"
-        @client.stub!(:save).and_return({ 'private_key' => "woot" })
-        filehandle = mock("Filehandle")
-        filehandle.should_receive(:print).with('woot')
-        File.should_receive(:open).with("/tmp/monkeypants", "w").and_yield(filehandle)
+        allow(@client).to receive(:save).and_return({ 'private_key' => "woot" })
+        filehandle = double("Filehandle")
+        expect(filehandle).to receive(:print).with('woot')
+        expect(File).to receive(:open).with("/tmp/monkeypants", "w").and_yield(filehandle)
+        @knife.run
+      end
+    end
+
+    describe "with -a or --admin" do
+      it "should create an admin client" do
+        @knife.config[:admin] = true
+        expect(@client).to receive(:admin).with(true)
+        @knife.run
+      end
+    end
+
+    describe "with --validator" do
+      it "should create an validator client" do
+        @knife.config[:validator] = true
+        expect(@client).to receive(:validator).with(true)
         @knife.run
       end
     end

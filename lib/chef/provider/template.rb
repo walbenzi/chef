@@ -22,10 +22,10 @@ require 'chef/provider/file'
 require 'chef/deprecation/provider/template'
 require 'chef/deprecation/warnings'
 
-
 class Chef
   class Provider
     class Template < Chef::Provider::File
+      provides :template
 
       extend Chef::Deprecation::Warnings
       include Chef::Deprecation::Provider::Template
@@ -52,7 +52,14 @@ class Chef
         end
       end
 
+      private
+
+      def managing_content?
+        return true if @new_resource.checksum
+        return true if !@new_resource.source.nil? && @action != :create_if_missing
+        false
+      end
+
     end
   end
 end
-

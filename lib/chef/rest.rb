@@ -29,11 +29,14 @@ end
 
 require 'chef/http/authenticator'
 require 'chef/http/decompressor'
-require 'chef/http/json_to_model_inflater'
+require 'chef/http/json_input'
+require 'chef/http/json_to_model_output'
 require 'chef/http/cookie_manager'
+require 'chef/http/validate_content_length'
 require 'chef/config'
 require 'chef/exceptions'
 require 'chef/platform/query_helpers'
+require 'chef/http/remote_request_id'
 
 class Chef
   # == Chef::REST
@@ -54,14 +57,27 @@ class Chef
     # http://localhost:4000, a call to +get_rest+ with 'nodes' will make an
     # HTTP GET request to http://localhost:4000/nodes
     def initialize(url, client_name=Chef::Config[:node_name], signing_key_filename=Chef::Config[:client_key], options={})
+      options = options.dup
       options[:client_name] = client_name
       options[:signing_key_filename] = signing_key_filename
       super(url, options)
 
-      @chef_json_inflater = JSONToModelInflater.new(options)
-      @cookie_manager = CookieManager.new(options)
       @decompressor = Decompressor.new(options)
       @authenticator = Authenticator.new(options)
+      @request_id = RemoteRequestID.new(options)
+
+      @middlewares << JSONInput.new(options)
+      @middlewares << JSONToModelOutput.new(options)
+      @middlewares << CookieManager.new(options)
+      @middlewares << @decompressor
+      @middlewares << @authenticator
+      @middlewares << @request_id
+
+      # ValidateContentLength should come after Decompressor
+      # because the order of middlewares is reversed when handling
+      # responses.
+      @middlewares << ValidateContentLength.new(options)
+
     end
 
     def signing_key_filename
@@ -94,9 +110,9 @@ class Chef
     #   to JSON inflated.
     def get(path, raw=false, headers={})
       if raw
-        streaming_request(create_url(path), headers)
+        streaming_request(path, headers)
       else
-        api_request(:GET, create_url(path), headers)
+        request(:GET, path, headers)
       end
     end
 
@@ -117,14 +133,26 @@ class Chef
       streaming_request(create_url(path), headers) {|tmp_file| yield tmp_file }
     end
 
-    # Chef::REST doesn't define middleware in the normal way for backcompat reasons, so it's hardcoded here.
-    def middlewares
-      [@chef_json_inflater, @cookie_manager, @decompressor, @authenticator]
-    end
-
     alias :api_request :request
 
-    alias :raw_http_request :send_http_request
+    # Do a HTTP request where no middleware is loaded (e.g. JSON input/output
+    # conversion) but the standard Chef Authentication headers are added to the
+    # request.
+    def raw_http_request(method, path, headers, data)
+      url = create_url(path)
+      method, url, headers, data = @authenticator.handle_request(method, url, headers, data)
+      method, url, headers, data = @request_id.handle_request(method, url, headers, data)
+      response, rest_request, return_value = send_http_request(method, url, headers, data)
+      response.error! unless success_response?(response)
+      return_value
+    rescue Exception => exception
+      log_failed_request(response, return_value) unless response.nil?
+
+      if exception.respond_to?(:chef_rest_request=)
+        exception.chef_rest_request = rest_request
+      end
+      raise
+    end
 
     # Deprecated:
     # Responsibilities of this method have been split up. The #http_client is
@@ -159,6 +187,11 @@ class Chef
     end
 
     public :create_url
+
+    def http_client(base_url=nil)
+      base_url ||= url
+      BasicClient.new(base_url, :ssl_policy => Chef::HTTP::APISSLPolicy)
+    end
 
     ############################################################################
     # DEPRECATED

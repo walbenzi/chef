@@ -46,7 +46,7 @@ describe Chef::Deprecation do
   end
 
   method_snapshot_file = File.join(CHEF_SPEC_DATA, "file-providers-method-snapshot-chef-11-4.json")
-  method_snapshot = JSON.parse(File.open(method_snapshot_file).read())
+  method_snapshot = Chef::JSONCompat.parse(File.open(method_snapshot_file).read())
 
   method_snapshot.each do |class_name, old_methods|
     class_object = class_from_string(class_name)
@@ -54,7 +54,7 @@ describe Chef::Deprecation do
 
     it "defines all methods on #{class_object} that were available in 11.0" do
       old_methods.each do |old_method|
-        current_methods.should include(old_method.to_sym)
+        expect(current_methods).to include(old_method.to_sym)
       end
     end
   end
@@ -62,25 +62,24 @@ describe Chef::Deprecation do
   context 'deprecation warning messages' do
     before(:each) do
       @warning_output = [ ]
-      Chef::Log.stub!(:warn) { |msg| @warning_output << msg }
+      allow(Chef::Log).to receive(:warn) { |msg| @warning_output << msg }
     end
 
     it 'should be enabled for deprecated methods' do
       TestClass.new.deprecated_method(10)
-      @warning_output.should_not be_empty
+      expect(@warning_output).not_to be_empty
     end
 
     it 'should contain stack trace' do
       TestClass.new.deprecated_method(10)
-      @warning_output.join("").include?(".rb").should be_true
+      expect(@warning_output.join("").include?(".rb")).to be_truthy
     end
   end
 
   it 'deprecated methods should still be called' do
     test_instance = TestClass.new
     test_instance.deprecated_method(10)
-    test_instance.get_value.should == 10
+    expect(test_instance.get_value).to eq(10)
   end
 
 end
-

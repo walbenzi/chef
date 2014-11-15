@@ -18,6 +18,7 @@
 
 require 'chef/chef_fs/file_system/chef_repository_file_system_cookbook_entry'
 require 'chef/chef_fs/file_system/cookbook_dir'
+require 'chef/chef_fs/file_system/not_found_error'
 require 'chef/cookbook/chefignore'
 require 'chef/cookbook/cookbook_version_loader'
 
@@ -34,7 +35,7 @@ class Chef
             loader = Chef::Cookbook::CookbookVersionLoader.new(file_path, parent.chefignore)
             # We need the canonical cookbook name if we are using versioned cookbooks, but we don't
             # want to spend a lot of time adding code to the main Chef libraries
-            if Chef::Config[:versioned_cookbooks]
+            if root.versioned_cookbooks
               _canonical_name = canonical_cookbook_name(File.basename(file_path))
               fail "When versioned_cookbooks mode is on, cookbook #{file_path} must match format <cookbook_name>-x.y.z"  unless _canonical_name
 
@@ -43,29 +44,37 @@ class Chef
             end
 
             loader.load_cookbooks
-            return loader.cookbook_version
-          rescue
-            Chef::Log.error("Could not read #{path_for_printing} into a Chef object: #{$!}")
+            cb = loader.cookbook_version
+            if !cb
+              Chef::Log.error("Cookbook #{file_path} empty.")
+              raise "Cookbook #{file_path} empty."
+            end
+            cb
+          rescue => e
+            Chef::Log.error("Could not read #{path_for_printing} into a Chef object: #{e}")
+            Chef::Log.error(e.backtrace.join("\n"))
+            raise
           end
-          nil
         end
 
         def children
-          Dir.entries(file_path).sort.
-              select { |child_name| can_have_child?(child_name, File.directory?(File.join(file_path, child_name))) }.
-              map do |child_name|
-                segment_info = CookbookDir::COOKBOOK_SEGMENT_INFO[child_name.to_sym] || {}
-                ChefRepositoryFileSystemCookbookEntry.new(child_name, self, nil, segment_info[:ruby_only], segment_info[:recursive])
-              end.
-              select { |entry| !(entry.dir? && entry.children.size == 0) }
+          begin
+            Dir.entries(file_path).sort.
+                select { |child_name| can_have_child?(child_name, File.directory?(File.join(file_path, child_name))) }.
+                map { |child_name| make_child(child_name) }.
+                select { |entry| !(entry.dir? && entry.children.size == 0) }
+          rescue Errno::ENOENT
+            raise Chef::ChefFS::FileSystem::NotFoundError.new(self, $!)
+          end
         end
 
         def can_have_child?(name, is_dir)
           if is_dir
             # Only the given directories will be uploaded.
             return CookbookDir::COOKBOOK_SEGMENT_INFO.keys.include?(name.to_sym) && name != 'root_files'
+          elsif name == Chef::Cookbook::CookbookVersionLoader::UPLOADED_COOKBOOK_VERSION_FILE
+            return false
           end
-
           super(name, is_dir)
         end
 
@@ -78,6 +87,21 @@ class Chef
 
         def canonical_cookbook_name(entry_name)
           self.class.canonical_cookbook_name(entry_name)
+        end
+
+        def uploaded_cookbook_version_path
+          File.join(file_path, Chef::Cookbook::CookbookVersionLoader::UPLOADED_COOKBOOK_VERSION_FILE)
+        end
+
+        def can_upload?
+          File.exists?(uploaded_cookbook_version_path) || children.size > 0
+        end
+
+        protected
+
+        def make_child(child_name)
+          segment_info = CookbookDir::COOKBOOK_SEGMENT_INFO[child_name.to_sym] || {}
+          ChefRepositoryFileSystemCookbookEntry.new(child_name, self, nil, segment_info[:ruby_only], segment_info[:recursive])
         end
       end
     end

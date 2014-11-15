@@ -32,12 +32,15 @@ class Chef
         @destination = name
         @resource_name = :scm
         @enable_submodules = false
+        @enable_checkout = true
         @revision = "HEAD"
         @remote = "origin"
         @ssh_wrapper = nil
         @depth = nil
         @allowed_actions.push(:checkout, :export, :sync, :diff, :log)
         @action = [:sync]
+        @checkout_branch = "deploy"
+        @environment = nil
       end
 
       def destination(arg=nil)
@@ -130,6 +133,14 @@ class Chef
         )
       end
 
+      def enable_checkout(arg=nil)
+        set_or_return(
+          :enable_checkout,
+          arg,
+          :kind_of => [TrueClass, FalseClass]
+        )
+      end
+
       def remote(arg=nil)
         set_or_return(
           :remote,
@@ -154,6 +165,23 @@ class Chef
         )
       end
 
+      def checkout_branch(arg=nil)
+        set_or_return(
+          :checkout_branch,
+          arg,
+          :kind_of => String
+        )
+      end
+
+      def environment(arg=nil)
+        set_or_return(
+          :environment,
+          arg,
+          :kind_of => [ Hash ]
+        )
+      end
+
+      alias :env :environment
     end
   end
 end

@@ -23,9 +23,9 @@ class Chef
     class PowershellScript < Chef::Provider::WindowsScript
 
       protected
-
-      EXIT_STATUS_NORMALIZATION_SCRIPT = "\nif ($? -eq $true) {exit 0} elseif ( $LASTEXITCODE -ne 0) {exit $LASTEXITCODE} else { exit 1 }"
-      EXIT_STATUS_RESET_SCRIPT = "$LASTEXITCODE=0\n"
+      EXIT_STATUS_EXCEPTION_HANDLER = "\ntrap [Exception] {write-error -exception ($_.Exception.Message);exit 1}".freeze
+      EXIT_STATUS_NORMALIZATION_SCRIPT = "\nif ($? -ne $true) { if ( $LASTEXITCODE -ne 0) {exit $LASTEXITCODE} else { exit 1 }}".freeze
+      EXIT_STATUS_RESET_SCRIPT = "\n$LASTEXITCODE=0".freeze
 
       # Process exit codes are strange with PowerShell. Unless you
       # explicitly call exit in Powershell, the powershell.exe
@@ -36,15 +36,30 @@ class Chef
       # last process run in the script if it is the last command
       # executed, otherwise 0 or 1 based on whether $? is set to true
       # (success, where we return 0) or false (where we return 1).
-      def NormalizeScriptExitStatus( code )
-        @code = (! code.nil?) ? ( EXIT_STATUS_RESET_SCRIPT + code + EXIT_STATUS_NORMALIZATION_SCRIPT ) : nil
+      def normalize_script_exit_status( code )
+        target_code = ( EXIT_STATUS_EXCEPTION_HANDLER +
+                        EXIT_STATUS_RESET_SCRIPT +
+                        "\n" +
+                        code.to_s +
+                        EXIT_STATUS_NORMALIZATION_SCRIPT )
+        convert_boolean_return = @new_resource.convert_boolean_return
+        @code = <<EOH
+new-variable -name interpolatedexitcode -visibility private -value $#{convert_boolean_return}
+new-variable -name chefscriptresult -visibility private
+$chefscriptresult = {
+#{target_code}
+}.invokereturnasis()
+if ($interpolatedexitcode -and $chefscriptresult.gettype().name -eq 'boolean') { exit [int32](!$chefscriptresult) } else { exit 0 }
+EOH
+        Chef::Log.debug("powershell_script provider called with script code:\n\n#{code}\n")
+        Chef::Log.debug("powershell_script provider will execute transformed code:\n\n#{@code}\n")
       end
 
       public
 
       def initialize (new_resource, run_context)
         super(new_resource, run_context, '.ps1')
-        NormalizeScriptExitStatus(new_resource.code)
+        normalize_script_exit_status(new_resource.code)
       end
 
       def flags
@@ -52,7 +67,7 @@ class Chef
           "-NoLogo",
           "-NonInteractive",
           "-NoProfile",
-          "-ExecutionPolicy RemoteSigned",
+          "-ExecutionPolicy Unrestricted",
           # Powershell will hang if STDIN is redirected
           # http://connect.microsoft.com/PowerShell/feedback/details/572313/powershell-exe-can-hang-if-stdin-is-redirected
           "-InputFormat None",

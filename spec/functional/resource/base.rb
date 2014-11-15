@@ -16,24 +16,13 @@
 # limitations under the License.
 #
 
-require 'spec_helper'
-
-def ohai
-  # provider is platform-dependent, we need platform ohai data:
-  @OHAI_SYSTEM ||= begin
-    ohai = Ohai::System.new
-    ohai.require_plugin("os")
-    ohai.require_plugin("platform")
-    ohai.require_plugin("passwd")
-    ohai
-  end
-end
 
 def run_context
   @run_context ||= begin
     node = Chef::Node.new
     node.default[:platform] = ohai[:platform]
     node.default[:platform_version] = ohai[:platform_version]
+    node.default[:os] = ohai[:os]
     events = Chef::EventDispatch::Dispatcher.new
     Chef::RunContext.new(node, {}, events)
   end

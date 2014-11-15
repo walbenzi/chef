@@ -58,6 +58,10 @@ class Chef
 
       SLASH = "/".freeze
 
+      HOST_LOWER = "host".freeze
+
+      URI_SCHEME_DEFAULT_PORT = { 'http'  => 80, 'https' => 443 }.freeze
+
       def self.user_agent=(ua)
         @user_agent = ua
       end
@@ -76,6 +80,10 @@ class Chef
       end
 
       def host
+        @url.hostname
+      end
+
+      def uri_safe_host
         @url.host
       end
 
@@ -132,6 +140,13 @@ class Chef
         # No response compression unless we asked for it explicitly:
         @headers[HTTPRequest::ACCEPT_ENCODING] ||= "identity"
         @headers['X-Chef-Version'] = ::Chef::VERSION
+
+        # Only include port in Host header when it is not the default port
+        # for the url scheme (80;443) - Fixes CHEF-5355
+        host_header = uri_safe_host.dup
+        host_header << ":#{port}" unless URI_SCHEME_DEFAULT_PORT[@url.scheme] == port.to_i
+        @headers['Host'] = host_header unless @headers.keys.any? {|k| k.downcase.to_s == HOST_LOWER }
+
         @headers
       end
 

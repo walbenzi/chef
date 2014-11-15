@@ -7,17 +7,17 @@ describe Chef::Knife::TagCreate do
     @knife.name_args = [ Chef::Config[:node_name], "happytag" ]
 
     @node = Chef::Node.new
-    @node.stub! :save
-    Chef::Node.stub!(:load).and_return @node
-    @stdout = StringIO.new
-    @knife.ui.stub!(:stdout).and_return(@stdout)
+    allow(@node).to receive :save
+    allow(Chef::Node).to receive(:load).and_return @node
+    @stderr = StringIO.new
+    allow(@knife.ui).to receive(:stderr).and_return(@stderr)
   end
 
   describe "run" do
     it "can create tags on a node" do
       @knife.run
-      @node.tags.should == ["happytag"]
-      @stdout.string.should match /created tags happytag.+node webmonkey.example.com/i
+      expect(@node.tags).to eq(["happytag"])
+      expect(@stderr.string).to match /created tags happytag.+node webmonkey.example.com/i
     end
   end
 end

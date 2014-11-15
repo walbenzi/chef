@@ -1,7 +1,14 @@
 require 'fcntl'
+require 'chef/mixin/shell_out'
+
+include Chef::Mixin::ShellOut
 
 def ruby_gte_20?
   RUBY_VERSION.to_f >= 2.0
+end
+
+def ruby_lt_20?
+  !ruby_gte_20?
 end
 
 def ruby_gte_19?
@@ -24,12 +31,62 @@ def windows?
   !!(RUBY_PLATFORM =~ /mswin|mingw|windows/)
 end
 
+def ohai
+  # This is defined in spec_helper; it has the `platform` populated.
+  OHAI_SYSTEM
+end
+
+require 'wmi-lite/wmi' if windows?
+
+def windows_domain_joined?
+  return false unless windows?
+  wmi = WmiLite::Wmi.new
+  computer_system = wmi.first_of('Win32_ComputerSystem')
+  computer_system['partofdomain']
+end
+
 def windows_win2k3?
   return false unless windows?
-  require 'ruby-wmi'
+  wmi = WmiLite::Wmi.new
+  host = wmi.first_of('Win32_OperatingSystem')
+  (host['version'] && host['version'].start_with?("5.2"))
+end
 
-  host = WMI::Win32_OperatingSystem.find(:first)
-  (host.version && host.version.start_with?("5.2"))
+def windows_2008r2_or_later?
+  return false unless windows?
+  wmi = WmiLite::Wmi.new
+  host = wmi.first_of('Win32_OperatingSystem')
+  version = host['version']
+  return false unless version
+  components = version.split('.').map do | component |
+    component.to_i
+  end
+  components.length >=2 && components[0] >= 6 && components[1] >= 1
+end
+
+def windows_powershell_dsc?
+  return false unless windows?
+  supports_dsc = false
+  begin
+    wmi = WmiLite::Wmi.new('root/microsoft/windows/desiredstateconfiguration')
+    lcm = wmi.query("SELECT * FROM meta_class WHERE __this ISA 'MSFT_DSCLocalConfigurationManager'")
+    supports_dsc = !! lcm
+  rescue WmiLite::WmiException
+  end
+  supports_dsc
+end
+
+def mac_osx_106?
+  if File.exists? "/usr/bin/sw_vers"
+    result = shell_out("/usr/bin/sw_vers")
+    result.stdout.each_line do |line|
+      if line =~ /^ProductVersion:\s10.6.*$/
+        return true
+      end
+    end
+  end
+
+  false
 end
 
 # detects if the hardware is 64-bit (evaluates to true in "WOW64" mode in a 32-bit app on a 64-bit system)
@@ -94,4 +151,21 @@ end
 
 def suse?
   File.exists?("/etc/SuSE-release")
+end
+
+def root?
+  return false if windows?
+  Process.euid == 0
+end
+
+def openssl_gte_101?
+  OpenSSL::OPENSSL_VERSION_NUMBER >= 10001000
+end
+
+def openssl_lt_101?
+  !openssl_gte_101?
+end
+
+def aes_256_gcm?
+  OpenSSL::Cipher.ciphers.include?("aes-256-gcm")
 end

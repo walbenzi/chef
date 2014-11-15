@@ -1,10 +1,10 @@
-# Chef
+# Chef [![Code Climate](https://codeclimate.com/github/opscode/chef.png)](https://codeclimate.com/github/opscode/chef)
 
 Want to try Chef? Get started with [learnchef](https://learnchef.opscode.com)
 
 * Documentation: [http://docs.opscode.com](http://docs.opscode.com)
 * Source: [http://github.com/opscode/chef/tree/master](http://github.com/opscode/chef/tree/master)
-* Tickets/Issues: [http://tickets.opscode.com](http://tickets.opscode.com)
+* Tickets/Issues: [https://github.com/opscode/chef/issues](https://github.com/opscode/chef/issues)
 * IRC: `#chef` and `#chef-hacking` on Freenode
 * Mailing list: [http://lists.opscode.com](http://lists.opscode.com)
 
@@ -33,7 +33,7 @@ emerge, etc.):
 * git
 * C compiler, header files, etc. On Ubuntu/debian, use the
   `build-essential` package.
-* ruby 1.8.7 or later (1.9.3+ recommended)
+* ruby 1.9.3 or later
 * rubygems
 * bundler
 

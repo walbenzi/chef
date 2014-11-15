@@ -19,7 +19,6 @@
 
 require 'chef/resource'
 require 'chef/platform/query_helpers'
-require 'chef/provider/file'
 require 'chef/mixin/securable'
 
 class Chef
@@ -38,7 +37,7 @@ class Chef
 
       attr_writer :checksum
 
-      provides :file, :on_platforms => :all
+      provides :file
 
       def initialize(name, run_context=nil)
         super
@@ -47,13 +46,11 @@ class Chef
         @backup = 5
         @action = "create"
         @allowed_actions.push(:create, :delete, :touch, :create_if_missing)
-        @provider = Chef::Provider::File
         @atomic_update = Chef::Config[:file_atomic_update]
         @force_unlink = false
         @manage_symlink_source = nil
         @diff = nil
       end
-
 
       def content(arg=nil)
         set_or_return(
@@ -118,7 +115,6 @@ class Chef
           :kind_of => [ TrueClass, FalseClass ]
         )
       end
-
     end
   end
 end

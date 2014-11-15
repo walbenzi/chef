@@ -139,8 +139,8 @@ class Chef
         end
 
         def load_data
-          Chef::JSONCompat.from_json(load_json_data)
-        rescue Chef::Exceptions::FileNotFound, Yajl::ParseError
+          Chef::JSONCompat.parse(load_json_data)
+        rescue Chef::Exceptions::FileNotFound, Chef::Exceptions::JSON::ParseError
           false
         end
 
@@ -149,7 +149,10 @@ class Chef
         end
 
         def sanitized_cache_file_basename
-          scrubbed_uri = uri.gsub(/\W/, '_')
+          # Scrub and truncate in accordance with the goals of keeping the name
+          # human-readable but within the bounds of local file system
+          # path length limits
+          scrubbed_uri = uri.gsub(/\W/, '_')[0..63]
           uri_md5 = Chef::Digester.instance.generate_md5_checksum(StringIO.new(uri))
           "#{scrubbed_uri}-#{uri_md5}.json"
         end
@@ -158,5 +161,3 @@ class Chef
     end
   end
 end
-
-

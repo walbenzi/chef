@@ -19,17 +19,45 @@
 
 require 'chef/mixin/from_file'
 require 'chef/mixin/convert_to_class_name'
-require 'chef/dsl/recipe'
 require 'chef/mixin/enforce_ownership_and_permissions'
 require 'chef/mixin/why_run'
+require 'chef/mixin/shell_out'
+require 'chef/mixin/descendants_tracker'
+require 'chef/platform/service_helpers'
+require 'chef/node_map'
+
 class Chef
   class Provider
-    include Chef::DSL::Recipe
     include Chef::Mixin::WhyRun
+    include Chef::Mixin::ShellOut
+    extend Chef::Mixin::DescendantsTracker
+
+    class << self
+      def node_map
+        @node_map ||= Chef::NodeMap.new
+      end
+
+      def provides(resource_name, opts={}, &block)
+        node_map.set(resource_name.to_sym, true, opts, &block)
+      end
+
+      # provides a node on the resource (early binding)
+      def provides?(node, resource)
+        node_map.get(node, resource.resource_name)
+      end
+
+      # supports the given resource and action (late binding)
+      def supports?(resource, action)
+        true
+      end
+    end
 
     attr_accessor :new_resource
     attr_accessor :current_resource
     attr_accessor :run_context
+
+    attr_reader :recipe_name
+    attr_reader :cookbook_name
 
     #--
     # TODO: this should be a reader, and the action should be passed in the
@@ -44,6 +72,9 @@ class Chef
       @current_resource = nil
       @run_context = run_context
       @converge_actions = nil
+
+      @recipe_name = nil
+      @cookbook_name = nil
     end
 
     def whyrun_mode?

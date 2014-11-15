@@ -17,7 +17,8 @@
 #
 
 require 'chef/chef_fs/file_system/base_fs_object'
-require 'digest/md5'
+require 'chef/http/simple'
+require 'openssl'
 
 class Chef
   module ChefFS
@@ -35,16 +36,12 @@ class Chef
         end
 
         def read
-          old_sign_on_redirect = rest.sign_on_redirect
-          rest.sign_on_redirect = false
           begin
-            tmpfile = rest.get_rest(file[:url], true)
+            tmpfile = rest.streaming_request(file[:url])
           rescue Timeout::Error => e
             raise Chef::ChefFS::FileSystem::OperationFailedError.new(:read, self, e), "Timeout reading #{file[:url]}: #{e}"
           rescue Net::HTTPServerException => e
             raise Chef::ChefFS::FileSystem::OperationFailedError.new(:read, self, e), "#{e.message} retrieving #{file[:url]}"
-          ensure
-            rest.sign_on_redirect = old_sign_on_redirect
           end
 
           begin
@@ -77,7 +74,7 @@ class Chef
         private
 
         def calc_checksum(value)
-          Digest::MD5.hexdigest(value)
+          OpenSSL::Digest::MD5.hexdigest(value)
         end
       end
     end

@@ -63,10 +63,14 @@ class Chef
         if user_info
           @current_resource.uid(user_info.uid)
           @current_resource.gid(user_info.gid)
-          @current_resource.comment(user_info.gecos)
           @current_resource.home(user_info.dir)
           @current_resource.shell(user_info.shell)
           @current_resource.password(user_info.passwd)
+
+          if @new_resource.comment && user_info.gecos.respond_to?(:force_encoding)
+            user_info.gecos.force_encoding(@new_resource.comment.encoding)
+          end
+          @current_resource.comment(user_info.gecos)
 
           if @new_resource.password && @current_resource.password == 'x'
             begin
@@ -99,8 +103,8 @@ class Chef
         end
         requirements.assert(:modify, :lock, :unlock) do |a|
           a.assertion { @user_exists }
-          a.failure_message(Chef::Exceptions::User, "Cannot modify user #{@new_resource} - does not exist!")
-          a.whyrun("Assuming user #{@new_resource} would have been created")
+          a.failure_message(Chef::Exceptions::User, "Cannot modify user #{@new_resource.username} - does not exist!")
+          a.whyrun("Assuming user #{@new_resource.username} would have been created")
         end
       end
 
@@ -124,12 +128,12 @@ class Chef
       def action_create
 
         if !@user_exists
-          converge_by("create user #{@new_resource}") do
+          converge_by("create user #{@new_resource.username}") do
             create_user
             Chef::Log.info("#{@new_resource} created")
           end
         elsif compare_user
-          converge_by("alter user #{@new_resource}") do
+          converge_by("alter user #{@new_resource.username}") do
             manage_user
             Chef::Log.info("#{@new_resource} altered")
           end
@@ -138,7 +142,7 @@ class Chef
 
       def action_remove
         if @user_exists
-          converge_by("remove user #{@new_resource}") do
+          converge_by("remove user #{@new_resource.username}") do
             remove_user
             Chef::Log.info("#{@new_resource} removed")
           end
@@ -151,7 +155,7 @@ class Chef
 
       def action_manage
         if @user_exists && compare_user
-          converge_by("manage user #{@new_resource}") do
+          converge_by("manage user #{@new_resource.username}") do
             manage_user
             Chef::Log.info("#{@new_resource} managed")
           end
@@ -164,7 +168,7 @@ class Chef
 
       def action_modify
         if compare_user
-          converge_by("modify user #{@new_resource}") do
+          converge_by("modify user #{@new_resource.username}") do
             manage_user
             Chef::Log.info("#{@new_resource} modified")
           end
@@ -173,7 +177,7 @@ class Chef
 
       def action_lock
         if check_lock() == false
-          converge_by("lock the user #{@new_resource}") do
+          converge_by("lock the user #{@new_resource.username}") do
             lock_user
             Chef::Log.info("#{@new_resource} locked")
           end
@@ -192,7 +196,7 @@ class Chef
 
       def action_unlock
         if check_lock() == true
-          converge_by("unlock user #{@new_resource}") do
+          converge_by("unlock user #{@new_resource.username}") do
             unlock_user
             Chef::Log.info("#{@new_resource} unlocked")
           end

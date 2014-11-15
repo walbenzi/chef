@@ -23,10 +23,65 @@ require 'chef/chef_fs/file_pattern'
 require 'chef/chef_fs/file_system'
 require 'chef/chef_fs/file_system/not_found_error'
 require 'chef/chef_fs/file_system/memory_root'
+require 'fileutils'
 
 class Chef
   module ChefFS
+    #
+    # Translation layer between chef-zero's DataStore (a place where it expects
+    # files to be stored) and ChefFS (the user's repository directory layout).
+    #
+    # chef-zero expects the data store to store files *its* way--for example, it
+    # expects get("nodes/blah") to return the JSON text for the blah node, and
+    # it expects get("cookbooks/blah/1.0.0") to return the JSON definition of
+    # the blah cookbook version 1.0.0.
+    #
+    # The repository is defined the way the *user* wants their layout.  These
+    # two things are very similar in layout (for example, nodes are stored under
+    # the nodes/ directory and their filename is the name of the node).
+    #
+    # However, there are a few differences that make this more than just a raw
+    # file store:
+    #
+    # 1. Cookbooks are stored much differently.
+    #   - chef-zero places JSON text with the checksums for the cookbook at
+    #     /cookbooks/NAME/VERSION, and expects the JSON to contain URLs to the
+    #     actual files, which are stored elsewhere.
+    #   - The repository contains an actual directory with just the cookbook
+    #     files and a metadata.rb containing a version #.  There is no JSON to
+    #     be found.
+    #   - Further, if versioned_cookbooks is false, that directory is named
+    #     /cookbooks/NAME and only one version exists.  If versioned_cookbooks
+    #     is true, the directory is named /cookbooks/NAME-VERSION.
+    #   - Therefore, ChefFSDataStore calculates the cookbook JSON by looking at
+    #     the files in the cookbook and checksumming them, and reading metadata.rb
+    #     for the version and dependency information.
+    #   - ChefFSDataStore also modifies the cookbook file URLs so that they point
+    #     to /file_store/repo/<filename> (the path to the actual file under the
+    #     repository root).  For example, /file_store/repo/apache2/metadata.rb or
+    #     /file_store/repo/cookbooks/apache2/recipes/default.rb).
+    #
+    # 2. Sandboxes don't exist in the repository.
+    #   - ChefFSDataStore lets cookbooks be uploaded into a temporary memory
+    #     storage, and when the cookbook is committed, copies the files onto the
+    #     disk in the correct place (/cookbooks/apache2/recipes/default.rb).
+    # 3. Data bags:
+    #   - The Chef server expects data bags in /data/BAG/ITEM
+    #   - The repository stores data bags in /data_bags/BAG/ITEM
+    #
+    # 4. JSON filenames are generally NAME.json in the repository (e.g. /nodes/foo.json).
+    #
     class ChefFSDataStore
+      #
+      # Create a new ChefFSDataStore
+      #
+      # ==== Arguments
+      #
+      # [chef_fs]
+      #   A +ChefFS::FileSystem+ object representing the repository root.
+      #   Generally will be a +ChefFS::FileSystem::ChefRepositoryFileSystemRoot+
+      #   object, created from +ChefFS::Config.local_fs+.
+      #
       def initialize(chef_fs)
         @chef_fs = chef_fs
         @memory_store = ChefZero::DataStore::MemoryStore.new
@@ -43,7 +98,11 @@ class Chef
           @memory_store.create_dir(path, name, *options)
         else
           with_dir(path) do |parent|
-            parent.create_child(chef_fs_filename(path + [name]), nil)
+            begin
+              parent.create_child(chef_fs_filename(path + [name]), nil)
+            rescue Chef::ChefFS::FileSystem::AlreadyExistsError => e
+              raise ChefZero::DataStore::DataAlreadyExistsError.new(to_zero_path(e.entry), e)
+            end
           end
         end
       end
@@ -61,7 +120,11 @@ class Chef
           end
 
           with_dir(path) do |parent|
-            parent.create_child(chef_fs_filename(path + [name]), data)
+            begin
+              parent.create_child(chef_fs_filename(path + [name]), data)
+            rescue Chef::ChefFS::FileSystem::AlreadyExistsError => e
+              raise ChefZero::DataStore::DataAlreadyExistsError.new(to_zero_path(e.entry), e)
+            end
           end
         end
       end
@@ -82,13 +145,19 @@ class Chef
           with_entry(path) do |entry|
             if path[0] == 'cookbooks' && path.length == 3
               # get /cookbooks/NAME/version
-              result = entry.chef_object.to_hash
+              result = nil
+              begin
+                result = entry.chef_object.to_hash
+              rescue Chef::ChefFS::FileSystem::NotFoundError => e
+                raise ChefZero::DataStore::DataNotFoundError.new(to_zero_path(e.entry), e)
+              end
+
               result.each_pair do |key, value|
                 if value.is_a?(Array)
                   value.each do |file|
                     if file.is_a?(Hash) && file.has_key?('checksum')
                       relative = ['file_store', 'repo', 'cookbooks']
-                      if Chef::Config.versioned_cookbooks
+                      if chef_fs.versioned_cookbooks
                         relative << "#{path[1]}-#{path[2]}"
                       else
                         relative << path[1]
@@ -99,10 +168,14 @@ class Chef
                   end
                 end
               end
-              JSON.pretty_generate(result)
+              Chef::JSONCompat.to_json_pretty(result)
 
             else
-              entry.read
+              begin
+                entry.read
+              rescue Chef::ChefFS::FileSystem::NotFoundError => e
+                raise ChefZero::DataStore::DataNotFoundError.new(to_zero_path(e.entry), e)
+              end
             end
           end
         end
@@ -121,7 +194,12 @@ class Chef
             write_cookbook(path, data, *options)
           else
             with_dir(path[0..-2]) do |parent|
-              parent.create_child(chef_fs_filename(path), data)
+              child = parent.child(chef_fs_filename(path))
+              if child.exists?
+                child.write(data)
+              else
+                parent.create_child(chef_fs_filename(path), data)
+              end
             end
           end
         end
@@ -132,10 +210,14 @@ class Chef
           @memory_store.delete(path)
         else
           with_entry(path) do |entry|
-            if path[0] == 'cookbooks' && path.length >= 3
-              entry.delete(true)
-            else
-              entry.delete
+            begin
+              if path[0] == 'cookbooks' && path.length >= 3
+                entry.delete(true)
+              else
+                entry.delete(false)
+              end
+            rescue Chef::ChefFS::FileSystem::NotFoundError => e
+              raise ChefZero::DataStore::DataNotFoundError.new(to_zero_path(e.entry), e)
             end
           end
         end
@@ -146,7 +228,11 @@ class Chef
           @memory_store.delete_dir(path, *options)
         else
           with_entry(path) do |entry|
-            entry.delete(options.include?(:recursive))
+            begin
+              entry.delete(options.include?(:recursive))
+            rescue Chef::ChefFS::FileSystem::NotFoundError => e
+              raise ChefZero::DataStore::DataNotFoundError.new(to_zero_path(e.entry), e)
+            end
           end
         end
       end
@@ -158,7 +244,7 @@ class Chef
         elsif path[0] == 'cookbooks' && path.length == 1
           with_entry(path) do |entry|
             begin
-              if Chef::Config.versioned_cookbooks
+              if chef_fs.versioned_cookbooks
                 # /cookbooks/name-version -> /cookbooks/name
                 entry.children.map { |child| split_name_version(child.name)[0] }.uniq
               else
@@ -171,11 +257,17 @@ class Chef
           end
 
         elsif path[0] == 'cookbooks' && path.length == 2
-          if Chef::Config.versioned_cookbooks
-            # list /cookbooks/name = filter /cookbooks/name-version down to name
-            entry.children.map { |child| split_name_version(child.name) }.
-                           select { |name, version| name == path[1] }.
-                           map { |name, version| version }.to_a
+          if chef_fs.versioned_cookbooks
+            result = with_entry([ 'cookbooks' ]) do |entry|
+              # list /cookbooks/name = filter /cookbooks/name-version down to name
+              entry.children.map { |child| split_name_version(child.name) }.
+                             select { |name, version| name == path[1] }.
+                             map { |name, version| version }
+            end
+            if result.empty?
+              raise ChefZero::DataStore::DataNotFoundError.new(path)
+            end
+            result
           else
             # list /cookbooks/name = <single version>
             version = get_single_cookbook_version(path)
@@ -186,12 +278,12 @@ class Chef
           with_entry(path) do |entry|
             begin
               entry.children.map { |c| zero_filename(c) }.sort
-            rescue Chef::ChefFS::FileSystem::NotFoundError
+            rescue Chef::ChefFS::FileSystem::NotFoundError => e
               # /cookbooks, /data, etc. never return 404
               if path_always_exists?(path)
                 []
               else
-                raise
+                raise ChefZero::DataStore::DataNotFoundError.new(to_zero_path(e.entry), e)
               end
             end
           end
@@ -223,28 +315,36 @@ class Chef
       end
 
       def write_cookbook(path, data, *options)
-        # Create a little Chef::ChefFS memory filesystem with the data
-        if Chef::Config.versioned_cookbooks
-          cookbook_path = "cookbooks/#{path[1]}-#{path[2]}"
+        if chef_fs.versioned_cookbooks
+          cookbook_path = File.join('cookbooks', "#{path[1]}-#{path[2]}")
         else
-          cookbook_path = "cookbooks/#{path[1]}"
+          cookbook_path = File.join('cookbooks', path[1])
         end
+
+        # Create a little Chef::ChefFS memory filesystem with the data
         cookbook_fs = Chef::ChefFS::FileSystem::MemoryRoot.new('uploading')
-        cookbook = JSON.parse(data, :create_additions => false)
+        cookbook = Chef::JSONCompat.parse(data)
         cookbook.each_pair do |key, value|
           if value.is_a?(Array)
             value.each do |file|
               if file.is_a?(Hash) && file.has_key?('checksum')
                 file_data = @memory_store.get(['file_store', 'checksums', file['checksum']])
-                cookbook_fs.add_file("#{cookbook_path}/#{file['path']}", file_data)
+                cookbook_fs.add_file(File.join(cookbook_path, file['path']), file_data)
               end
             end
           end
         end
 
-        # Use the copy/diff algorithm to copy it down so we don't destroy
-        # chefignored data.  This is terribly un-thread-safe.
-        Chef::ChefFS::FileSystem.copy_to(Chef::ChefFS::FilePattern.new("/#{cookbook_path}"), cookbook_fs, chef_fs, nil, {:purge => true})
+        # Create the .uploaded-cookbook-version.json
+        cookbooks = chef_fs.child('cookbooks')
+        if !cookbooks.exists?
+          cookbooks = chef_fs.create_child('cookbooks')
+        end
+        # We are calling a cookbooks-specific API, so get multiplexed_dirs out of the way if it is there
+        if cookbooks.respond_to?(:multiplexed_dirs)
+          cookbooks = cookbooks.write_dir
+        end
+        cookbooks.write_cookbook(cookbook_path, data, cookbook_fs)
       end
 
       def split_name_version(entry_name)
@@ -272,7 +372,7 @@ class Chef
         elsif path[0] == 'cookbooks'
           if path.length == 2
             raise ChefZero::DataStore::DataNotFoundError.new(path)
-          elsif Chef::Config.versioned_cookbooks
+          elsif chef_fs.versioned_cookbooks
             if path.length >= 3
               # cookbooks/name/version -> cookbooks/name-version
               path = [ path[0], "#{path[1]}-#{path[2]}" ] + path[3..-1]
@@ -305,7 +405,7 @@ class Chef
           end
 
         elsif path[0] == 'cookbooks'
-          if Chef::Config.versioned_cookbooks
+          if chef_fs.versioned_cookbooks
             # cookbooks/name-version/... -> cookbooks/name/version/...
             if path.length >= 2
               name, version = split_name_version(path[1])
@@ -343,8 +443,10 @@ class Chef
       end
 
       def with_dir(path)
+        # Do not automatically create data bags
+        create = !(path[0] == 'data' && path.size >= 2)
         begin
-          yield get_dir(_to_chef_fs_path(path), true)
+          yield get_dir(_to_chef_fs_path(path), create)
         rescue Chef::ChefFS::FileSystem::NotFoundError => e
           raise ChefZero::DataStore::DataNotFoundError.new(to_zero_path(e.entry), e)
         end

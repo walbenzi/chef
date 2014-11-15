@@ -50,7 +50,13 @@ class Chef
     class Override < RuntimeError; end
     class UnsupportedAction < RuntimeError; end
     class MissingLibrary < RuntimeError; end
-    class CannotDetermineNodeName < RuntimeError; end
+
+    class CannotDetermineNodeName < RuntimeError
+      def initialize
+        super "Unable to determine node name: configure node_name or configure the system's hostname and fqdn"
+      end
+    end
+
     class User < RuntimeError; end
     class Group < RuntimeError; end
     class Link < RuntimeError; end
@@ -58,6 +64,7 @@ class Chef
     class PrivateKeyMissing < RuntimeError; end
     class CannotWritePrivateKey < RuntimeError; end
     class RoleNotFound < RuntimeError; end
+    class DuplicateRole < RuntimeError; end
     class ValidationFailed < ArgumentError; end
     class InvalidPrivateKey < ArgumentError; end
     class ConfigurationError < ArgumentError; end
@@ -70,15 +77,26 @@ class Chef
     class CookbookNotFoundInRepo < ArgumentError; end
     class RecipeNotFound < ArgumentError; end
     class AttributeNotFound < RuntimeError; end
+    class MissingCookbookDependency < StandardError; end # CHEF-5120
     class InvalidCommandOption < RuntimeError; end
     class CommandTimeout < RuntimeError; end
     class RequestedUIDUnavailable < RuntimeError; end
     class InvalidHomeDirectory < ArgumentError; end
     class DsclCommandFailed < RuntimeError; end
+    class PlistUtilCommandFailed < RuntimeError; end
     class UserIDNotFound < ArgumentError; end
     class GroupIDNotFound < ArgumentError; end
+    class ConflictingMembersInGroup < ArgumentError; end
     class InvalidResourceReference < RuntimeError; end
     class ResourceNotFound < RuntimeError; end
+
+    # Can't find a Resource of this type that is valid on this platform.
+    class NoSuchResourceType < NameError
+      def initialize(short_name, node)
+        super "Cannot find a resource for #{short_name} on #{node[:platform]} version #{node[:platform_version]}"
+      end
+    end
+
     class InvalidResourceSpecification < ArgumentError; end
     class SolrConnectionError < RuntimeError; end
     class IllegalChecksumRevert < RuntimeError; end
@@ -102,6 +120,11 @@ class Chef
     class Win32ArchitectureIncorrect < RuntimeError; end
     class ObsoleteDependencySyntax < ArgumentError; end
     class InvalidDataBagPath < ArgumentError; end
+    class DuplicateDataBagItem < RuntimeError; end
+
+    class PowershellCmdletException < RuntimeError; end
+
+    class CannotDetermineHomebrewOwner < Package; end
 
     # A different version of a cookbook was added to a
     # VersionedRecipeList than the one already there.
@@ -117,6 +140,8 @@ class Chef
 
     # Version constraints are not allowed in chef-solo
     class IllegalVersionConstraint < NotImplementedError; end
+
+    class MetadataNotValid < StandardError; end
 
     # File operation attempted but no permissions to perform it
     class InsufficientPermissions < RuntimeError; end
@@ -162,6 +187,8 @@ class Chef
 
     class ChildConvergeError < RuntimeError; end
 
+    class NoProviderAvailable < RuntimeError; end
+
     class MissingRole < RuntimeError
       NULL = Object.new
 
@@ -180,7 +207,6 @@ class Chef
           super("The expanded run list includes nonexistent roles: #{missing_roles}")
         end
       end
-
 
     end
     # Exception class for collecting multiple failures. Used when running
@@ -249,7 +275,7 @@ class Chef
             "non_existent_cookbooks" => non_existent_cookbooks,
             "cookbooks_with_no_versions" => cookbooks_with_no_matching_versions
           }
-          result.to_json(*a)
+          Chef::JSONCompat.to_json(result, *a)
         end
       end
 
@@ -284,7 +310,7 @@ class Chef
             "non_existent_cookbooks" => non_existent_cookbooks,
             "most_constrained_cookbooks" => most_constrained_cookbooks
           }
-          result.to_json(*a)
+          Chef::JSONCompat.to_json(result, *a)
         end
       end
 
@@ -296,5 +322,49 @@ class Chef
     # non-GET and non-HEAD request will thus raise an InvalidRedirect.
     class InvalidRedirect < StandardError; end
 
+    # Raised when the content length of a download does not match the content
+    # length declared in the http response.
+    class ContentLengthMismatch < RuntimeError
+      def initialize(response_length, content_length)
+        super "Response body length #{response_length} does not match HTTP Content-Length header #{content_length}."
+      end
+    end
+
+    class UnsupportedPlatform < RuntimeError
+      def initialize(platform)
+        super "This functionality is not supported on platform #{platform}."
+      end
+    end
+
+    # Raised when Chef::Config[:run_lock_timeout] is set and some other client run fails
+    # to release the run lock becure Chef::Config[:run_lock_timeout] seconds pass.
+    class RunLockTimeout < RuntimeError
+      def initialize(duration, blocking_pid)
+        super "Unable to acquire lock. Waited #{duration} seconds for #{blocking_pid} to release."
+      end
+    end
+
+    class ChecksumMismatch < RuntimeError
+      def initialize(res_cksum, cont_cksum)
+        super "Checksum on resource (#{res_cksum}) does not match checksum on content (#{cont_cksum})"
+      end
+    end
+
+    class BadProxyURI < RuntimeError; end
+
+    # Raised by Chef::JSONCompat
+    class JSON
+      class EncodeError < RuntimeError; end
+      class ParseError < RuntimeError; end
+    end
+
+    class InvalidSearchQuery < ArgumentError; end
+
+    # Raised by Chef::ProviderResolver
+    class AmbiguousProviderResolution < RuntimeError
+      def initialize(resource, classes)
+        super "Found more than one provider for #{resource.resource_name} resource: #{classes}"
+      end
+    end
   end
 end

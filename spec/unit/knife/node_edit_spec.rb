@@ -20,6 +20,12 @@ require 'spec_helper'
 Chef::Knife::NodeEdit.load_deps
 
 describe Chef::Knife::NodeEdit do
+
+  # helper to convert the view from Chef objects into Ruby objects representing JSON
+  def deserialized_json_view
+    actual = Chef::JSONCompat.from_json(Chef::JSONCompat.to_json_pretty(@knife.node_editor.send(:view)))
+  end
+
   before(:each) do
     Chef::Config[:node_name]  = "webmonkey.example.com"
     @knife = Chef::Knife::NodeEdit.new
@@ -33,13 +39,13 @@ describe Chef::Knife::NodeEdit do
   end
 
   it "should load the node" do
-    Chef::Node.should_receive(:load).with("adam").and_return(@node)
+    expect(Chef::Node).to receive(:load).with("adam").and_return(@node)
     @knife.node
   end
 
   describe "after loading the node" do
     before do
-      @knife.stub!(:node).and_return(@node)
+      allow(@knife).to receive(:node).and_return(@node)
       @node.automatic_attrs = {:go => :away}
       @node.default_attrs = {:hide => :me}
       @node.override_attrs = {:dont => :show}
@@ -49,40 +55,61 @@ describe Chef::Knife::NodeEdit do
     end
 
     it "creates a view of the node without attributes from roles or ohai" do
-      actual = Chef::JSONCompat.from_json(@knife.node_editor.view)
-      actual.should_not have_key("automatic")
-      actual.should_not have_key("override")
-      actual.should_not have_key("default")
-      actual["normal"].should == {"do_show" => "these"}
-      actual["run_list"].should == ["recipe[foo]"]
-      actual["chef_environment"].should == "prod"
+      actual = deserialized_json_view
+      expect(actual).not_to have_key("automatic")
+      expect(actual).not_to have_key("override")
+      expect(actual).not_to have_key("default")
+      expect(actual["normal"]).to eq({"do_show" => "these"})
+      expect(actual["run_list"]).to eq(["recipe[foo]"])
+      expect(actual["chef_environment"]).to eq("prod")
     end
 
     it "shows the extra attributes when given the --all option" do
       @knife.config[:all_attributes] = true
 
-      actual = Chef::JSONCompat.from_json(@knife.node_editor.view)
-      actual["automatic"].should == {"go" => "away"}
-      actual["override"].should == {"dont" => "show"}
-      actual["default"].should == {"hide" => "me"}
-      actual["normal"].should == {"do_show" => "these"}
-      actual["run_list"].should == ["recipe[foo]"]
-      actual["chef_environment"].should == "prod"
+      actual = deserialized_json_view
+      expect(actual["automatic"]).to eq({"go" => "away"})
+      expect(actual["override"]).to eq({"dont" => "show"})
+      expect(actual["default"]).to eq({"hide" => "me"})
+      expect(actual["normal"]).to eq({"do_show" => "these"})
+      expect(actual["run_list"]).to eq(["recipe[foo]"])
+      expect(actual["chef_environment"]).to eq("prod")
     end
 
     it "does not consider unedited data updated" do
-      view = Chef::JSONCompat.from_json( @knife.node_editor.view )
-      @knife.node_editor.apply_updates(view)
-      @knife.node_editor.should_not be_updated
+      view = deserialized_json_view
+      @knife.node_editor.send(:apply_updates, view)
+      expect(@knife.node_editor).not_to be_updated
     end
 
     it "considers edited data updated" do
-      view = Chef::JSONCompat.from_json( @knife.node_editor.view )
+      view = deserialized_json_view
       view["run_list"] << "role[fuuu]"
-      @knife.node_editor.apply_updates(view)
-      @knife.node_editor.should be_updated
+      @knife.node_editor.send(:apply_updates, view)
+      expect(@knife.node_editor).to be_updated
     end
 
   end
+
+  describe "edit_node" do
+
+    before do
+      allow(@knife).to receive(:node).and_return(@node)
+    end
+
+    let(:subject) { @knife.node_editor.edit_node }
+
+    it "raises an exception when editing is disabled" do
+      @knife.config[:disable_editing] = true
+      expect{ subject }.to raise_error(SystemExit)
+    end
+
+    it "raises an exception when the editor is not set" do
+      @knife.config[:editor] = nil
+      expect{ subject }.to raise_error(SystemExit)
+    end
+
+  end
+
 end
 

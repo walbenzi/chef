@@ -17,8 +17,10 @@
 
 # Wrapper class for interacting with JSON.
 
+require 'ffi_yajl'
+require 'chef/exceptions'
+# We're requiring this to prevent breaking consumers using Hash.to_json
 require 'json'
-require 'yajl'
 
 class Chef
   class JSONCompat
@@ -37,29 +39,29 @@ class Chef
     CHEF_SANDBOX            = "Chef::Sandbox".freeze
     CHEF_RESOURCE           = "Chef::Resource".freeze
     CHEF_RESOURCECOLLECTION = "Chef::ResourceCollection".freeze
+    CHEF_RESOURCESET        = "Chef::ResourceCollection::ResourceSet".freeze
+    CHEF_RESOURCELIST       = "Chef::ResourceCollection::ResourceList".freeze
 
     class <<self
 
-      # See CHEF-1292/PL-538. Increase the max nesting for JSON, which defaults
-      # to 19, and isn't enough for some (for example, a Node within a Node)
-      # structures.
-      def opts_add_max_nesting(opts)
-        if opts.nil? || !opts.has_key?(:max_nesting)
-          opts = opts.nil? ? Hash.new : opts.clone
-          opts[:max_nesting] = JSON_MAX_NESTING
+      # API to use to avoid create_addtions
+      def parse(source, opts = {})
+        begin
+          FFI_Yajl::Parser.parse(source, opts)
+        rescue FFI_Yajl::ParseError => e
+          raise Chef::Exceptions::JSON::ParseError, e.message
         end
-        opts
       end
 
       # Just call the JSON gem's parse method with a modified :max_nesting field
       def from_json(source, opts = {})
-        obj = ::Yajl::Parser.parse(source)
+        obj = parse(source, opts)
 
         # JSON gem requires top level object to be a Hash or Array (otherwise
         # you get the "must contain two octets" error). Yajl doesn't impose the
         # same limitation. For compatibility, we re-impose this condition.
         unless obj.kind_of?(Hash) or obj.kind_of?(Array)
-          raise JSON::ParserError, "Top level JSON object must be a Hash or Array. (actual: #{obj.class})"
+          raise Chef::Exceptions::JSON::ParseError, "Top level JSON object must be a Hash or Array. (actual: #{obj.class})"
         end
 
         # The old default in the json gem (which we are mimicing because we
@@ -99,13 +101,20 @@ class Chef
       end
 
       def to_json(obj, opts = nil)
-        obj.to_json(opts_add_max_nesting(opts))
+        begin
+          FFI_Yajl::Encoder.encode(obj, opts)
+        rescue FFI_Yajl::EncodeError => e
+          raise Chef::Exceptions::JSON::EncodeError, e.message
+        end
       end
 
       def to_json_pretty(obj, opts = nil)
-        ::JSON.pretty_generate(obj, opts_add_max_nesting(opts))
+        opts ||= {}
+        options_map = {}
+        options_map[:pretty] = true
+        options_map[:indent] = opts[:indent] if opts.has_key?(:indent)
+        to_json(obj, options_map).chomp
       end
-
 
       # Map +json_class+ to a Class object. We use a +case+ instead of a Hash
       # assigned to a constant because otherwise this file could not be loaded
@@ -138,10 +147,14 @@ class Chef
           Chef::Resource
         when CHEF_RESOURCECOLLECTION
           Chef::ResourceCollection
+        when CHEF_RESOURCESET
+          Chef::ResourceCollection::ResourceSet
+        when CHEF_RESOURCELIST
+          Chef::ResourceCollection::ResourceList
         when /^Chef::Resource/
-          Chef::Resource.find_subclass_by_name(json_class)
+          Chef::Resource.find_descendants_by_name(json_class)
         else
-          raise JSON::ParserError, "Unsupported `json_class` type '#{json_class}'"
+          raise Chef::Exceptions::JSON::ParseError, "Unsupported `json_class` type '#{json_class}'"
         end
       end
 

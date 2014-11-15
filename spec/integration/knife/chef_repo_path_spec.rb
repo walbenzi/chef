@@ -16,40 +16,65 @@
 # limitations under the License.
 
 require 'support/shared/integration/integration_helper'
+require 'support/shared/context/config'
 require 'chef/knife/list'
 require 'chef/knife/show'
 
-describe 'chef_repo_path tests' do
-  extend IntegrationSupport
+describe 'chef_repo_path tests', :workstation do
+  include IntegrationSupport
   include KnifeSupport
 
   # TODO alternate repo_path / *_path
   context 'alternate *_path' do
     when_the_repository 'has clients and clients2, cookbooks and cookbooks2, etc.' do
-      file 'clients/client1.json', {}
-      file 'cookbooks/cookbook1/metadata.rb', ''
-      file 'data_bags/bag/item.json', {}
-      file 'environments/env1.json', {}
-      file 'nodes/node1.json', {}
-      file 'roles/role1.json', {}
-      file 'users/user1.json', {}
+      before do
+        file 'clients/client1.json', {}
+        file 'cookbooks/cookbook1/metadata.rb', ''
+        file 'data_bags/bag/item.json', {}
+        file 'environments/env1.json', {}
+        file 'nodes/node1.json', {}
+        file 'roles/role1.json', {}
+        file 'users/user1.json', {}
 
-      file 'clients2/client2.json', {}
-      file 'cookbooks2/cookbook2/metadata.rb', ''
-      file 'data_bags2/bag2/item2.json', {}
-      file 'environments2/env2.json', {}
-      file 'nodes2/node2.json', {}
-      file 'roles2/role2.json', {}
-      file 'users2/user2.json', {}
+        file 'clients2/client2.json', {}
+        file 'cookbooks2/cookbook2/metadata.rb', ''
+        file 'data_bags2/bag2/item2.json', {}
+        file 'environments2/env2.json', {}
+        file 'nodes2/node2.json', {}
+        file 'roles2/role2.json', {}
+        file 'users2/user2.json', {}
 
-      directory 'chef_repo2' do
-        file 'clients/client3.json', {}
-        file 'cookbooks/cookbook3/metadata.rb', ''
-        file 'data_bags/bag3/item3.json', {}
-        file 'environments/env3.json', {}
-        file 'nodes/node3.json', {}
-        file 'roles/role3.json', {}
-        file 'users/user3.json', {}
+        directory 'chef_repo2' do
+          file 'clients/client3.json', {}
+          file 'cookbooks/cookbook3/metadata.rb', ''
+          file 'data_bags/bag3/item3.json', {}
+          file 'environments/env3.json', {}
+          file 'nodes/node3.json', {}
+          file 'roles/role3.json', {}
+          file 'users/user3.json', {}
+        end
+      end
+
+      it 'knife list --local -Rfp --chef-repo-path chef_repo2 / grabs chef_repo2 stuff' do
+        Chef::Config.delete(:chef_repo_path)
+        knife("list --local -Rfp --chef-repo-path #{path_to('chef_repo2')} /").should_succeed <<EOM
+/clients/
+/clients/client3.json
+/cookbooks/
+/cookbooks/cookbook3/
+/cookbooks/cookbook3/metadata.rb
+/data_bags/
+/data_bags/bag3/
+/data_bags/bag3/item3.json
+/environments/
+/environments/env3.json
+/nodes/
+/nodes/node3.json
+/roles/
+/roles/role3.json
+/users/
+/users/user3.json
+EOM
       end
 
       context 'when all _paths are set to alternates' do
@@ -60,22 +85,43 @@ describe 'chef_repo_path tests' do
           Chef::Config.chef_repo_path = File.join(Chef::Config.chef_repo_path, 'chef_repo2')
         end
 
+        it 'knife list --local -Rfp --chef-repo-path chef_repo2 / grabs chef_repo2 stuff' do
+          knife("list --local -Rfp --chef-repo-path #{path_to('chef_repo2')} /").should_succeed <<EOM
+/clients/
+/clients/client3.json
+/cookbooks/
+/cookbooks/cookbook3/
+/cookbooks/cookbook3/metadata.rb
+/data_bags/
+/data_bags/bag3/
+/data_bags/bag3/item3.json
+/environments/
+/environments/env3.json
+/nodes/
+/nodes/node3.json
+/roles/
+/roles/role3.json
+/users/
+/users/user3.json
+EOM
+        end
+
         context 'when cwd is at the top level' do
-          cwd '.'
+          before { cwd '.' }
           it 'knife list --local -Rfp fails' do
             knife('list --local -Rfp').should_fail("ERROR: Attempt to use relative path '' when current directory is outside the repository path\n")
           end
         end
 
         context 'when cwd is inside the data_bags directory' do
-          cwd 'data_bags'
+          before { cwd 'data_bags' }
           it 'knife list --local -Rfp fails' do
             knife('list --local -Rfp').should_fail("ERROR: Attempt to use relative path '' when current directory is outside the repository path\n")
           end
         end
 
         context 'when cwd is inside chef_repo2' do
-          cwd 'chef_repo2'
+          before { cwd 'chef_repo2' }
           it 'knife list --local -Rfp lists everything' do
             knife('list --local -Rfp').should_succeed <<EOM
 clients/
@@ -99,7 +145,7 @@ EOM
         end
 
         context 'when cwd is inside data_bags2' do
-          cwd 'data_bags2'
+          before { cwd 'data_bags2' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag2/
@@ -120,7 +166,7 @@ EOM
         end
 
         context 'when cwd is at the top level' do
-          cwd '.'
+          before { cwd '.' }
           it 'knife list --local -Rfp lists everything' do
             knife('list --local -Rfp').should_succeed <<EOM
 clients/
@@ -144,21 +190,21 @@ EOM
         end
 
         context 'when cwd is inside the data_bags directory' do
-          cwd 'data_bags'
+          before { cwd 'data_bags' }
           it 'knife list --local -Rfp fails' do
             knife('list --local -Rfp').should_fail("ERROR: Attempt to use relative path '' when current directory is outside the repository path\n")
           end
         end
 
         context 'when cwd is inside chef_repo2' do
-          cwd 'chef_repo2'
+          before { cwd 'chef_repo2' }
           it 'knife list -Rfp fails' do
             knife('list --local -Rfp').should_fail("ERROR: Attempt to use relative path '' when current directory is outside the repository path\n")
           end
         end
 
         context 'when cwd is inside data_bags2' do
-          cwd 'data_bags2'
+          before { cwd 'data_bags2' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag2/
@@ -177,21 +223,21 @@ EOM
         end
 
         context 'when cwd is at the top level' do
-          cwd '.'
+          before { cwd '.' }
           it 'knife list --local -Rfp fails' do
             knife('list --local -Rfp').should_fail("ERROR: Attempt to use relative path '' when current directory is outside the repository path\n")
           end
         end
 
         context 'when cwd is inside the data_bags directory' do
-          cwd 'data_bags'
+          before { cwd 'data_bags' }
           it 'knife list --local -Rfp fails' do
             knife('list --local -Rfp').should_fail("ERROR: Attempt to use relative path '' when current directory is outside the repository path\n")
           end
         end
 
         context 'when cwd is inside chef_repo2' do
-          cwd 'chef_repo2'
+          before { cwd 'chef_repo2' }
           it 'knife list --local -Rfp lists everything' do
             knife('list --local -Rfp').should_succeed <<EOM
 clients/
@@ -215,7 +261,7 @@ EOM
         end
 
         context 'when cwd is inside chef_repo2/data_bags' do
-          cwd 'chef_repo2/data_bags'
+          before { cwd 'chef_repo2/data_bags' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag3/
@@ -237,20 +283,25 @@ EOM
         end
 
         context 'when there is a directory in clients1 and file in clients2 with the same name' do
-          directory 'clients/blah.json'
-          file 'clients2/blah.json', {}
+          before do
+            directory 'clients/blah.json'
+            file 'clients2/blah.json', {}
+          end
           it 'knife show /clients/blah.json succeeds' do
             knife('show --local /clients/blah.json').should_succeed <<EOM
 /clients/blah.json:
 {
+
 }
 EOM
           end
         end
 
         context 'when there is a file in cookbooks1 and directory in cookbooks2 with the same name' do
-          file 'cookbooks/blah', ''
-          file 'cookbooks2/blah/metadata.rb', ''
+          before do
+            file 'cookbooks/blah', ''
+            file 'cookbooks2/blah/metadata.rb', ''
+          end
           it 'knife list -Rfp cookbooks shows files in blah' do
             knife('list --local -Rfp /cookbooks').should_succeed <<EOM
 /cookbooks/blah/
@@ -264,8 +315,10 @@ EOM
         end
 
         context 'when there is an empty directory in cookbooks1 and a real cookbook in cookbooks2 with the same name' do
-          directory 'cookbooks/blah'
-          file 'cookbooks2/blah/metadata.rb', ''
+          before do
+            directory 'cookbooks/blah'
+            file 'cookbooks2/blah/metadata.rb', ''
+          end
           it 'knife list -Rfp cookbooks shows files in blah' do
             knife('list --local -Rfp /cookbooks').should_succeed(<<EOM, :stderr => "WARN: Cookbook 'blah' is empty or entirely chefignored at #{Chef::Config.cookbook_path[0]}/blah\n")
 /cookbooks/blah/
@@ -279,8 +332,10 @@ EOM
         end
 
         context 'when there is a cookbook in cookbooks1 and a cookbook in cookbooks2 with the same name' do
-          file 'cookbooks/blah/metadata.json', {}
-          file 'cookbooks2/blah/metadata.rb', ''
+          before do
+            file 'cookbooks/blah/metadata.json', {}
+            file 'cookbooks2/blah/metadata.rb', ''
+          end
           it 'knife list -Rfp cookbooks shows files in the first cookbook and not the second' do
             knife('list --local -Rfp /cookbooks').should_succeed(<<EOM, :stderr => "WARN: Child with name 'blah' found in multiple directories: #{Chef::Config.cookbook_path[0]}/blah and #{Chef::Config.cookbook_path[1]}/blah\n")
 /cookbooks/blah/
@@ -294,8 +349,10 @@ EOM
         end
 
         context 'when there is a file in data_bags1 and a directory in data_bags2 with the same name' do
-          file 'data_bags/blah', ''
-          file 'data_bags2/blah/item.json', ''
+          before do
+            file 'data_bags/blah', ''
+            file 'data_bags2/blah/item.json', ''
+          end
           it 'knife list -Rfp data_bags shows files in blah' do
             knife('list --local -Rfp /data_bags').should_succeed <<EOM
 /data_bags/bag/
@@ -309,8 +366,10 @@ EOM
         end
 
         context 'when there is a data bag in data_bags1 and a data bag in data_bags2 with the same name' do
-          file 'data_bags/blah/item1.json', ''
-          file 'data_bags2/blah/item2.json', ''
+          before do
+            file 'data_bags/blah/item1.json', ''
+            file 'data_bags2/blah/item2.json', ''
+          end
           it 'knife list -Rfp data_bags shows only items in data_bags1' do
             knife('list --local -Rfp /data_bags').should_succeed(<<EOM, :stderr => "WARN: Child with name 'blah' found in multiple directories: #{Chef::Config.data_bag_path[0]}/blah and #{Chef::Config.data_bag_path[1]}/blah\n")
 /data_bags/bag/
@@ -324,62 +383,74 @@ EOM
         end
 
         context 'when there is a directory in environments1 and file in environments2 with the same name' do
-          directory 'environments/blah.json'
-          file 'environments2/blah.json', {}
+          before do
+            directory 'environments/blah.json'
+            file 'environments2/blah.json', {}
+          end
           it 'knife show /environments/blah.json succeeds' do
             knife('show --local /environments/blah.json').should_succeed <<EOM
 /environments/blah.json:
 {
+
 }
 EOM
           end
         end
 
         context 'when there is a directory in nodes1 and file in nodes2 with the same name' do
-          directory 'nodes/blah.json'
-          file 'nodes2/blah.json', {}
+          before do
+            directory 'nodes/blah.json'
+            file 'nodes2/blah.json', {}
+          end
           it 'knife show /nodes/blah.json succeeds' do
             knife('show --local /nodes/blah.json').should_succeed <<EOM
 /nodes/blah.json:
 {
+
 }
 EOM
           end
         end
 
         context 'when there is a directory in roles1 and file in roles2 with the same name' do
-          directory 'roles/blah.json'
-          file 'roles2/blah.json', {}
+          before do
+            directory 'roles/blah.json'
+            file 'roles2/blah.json', {}
+          end
           it 'knife show /roles/blah.json succeeds' do
             knife('show --local /roles/blah.json').should_succeed <<EOM
 /roles/blah.json:
 {
+
 }
 EOM
           end
         end
 
         context 'when there is a directory in users1 and file in users2 with the same name' do
-          directory 'users/blah.json'
-          file 'users2/blah.json', {}
+          before do
+            directory 'users/blah.json'
+            file 'users2/blah.json', {}
+          end
           it 'knife show /users/blah.json succeeds' do
             knife('show --local /users/blah.json').should_succeed <<EOM
 /users/blah.json:
 {
+
 }
 EOM
           end
         end
 
         context 'when cwd is at the top level' do
-          cwd '.'
+          before { cwd '.' }
           it 'knife list --local -Rfp fails' do
             knife('list --local -Rfp').should_fail("ERROR: Attempt to use relative path '' when current directory is outside the repository path\n")
           end
         end
 
         context 'when cwd is inside the data_bags directory' do
-          cwd 'data_bags'
+          before { cwd 'data_bags' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag/
@@ -391,7 +462,7 @@ EOM
         end
 
         context 'when cwd is inside chef_repo2' do
-          cwd 'chef_repo2'
+          before { cwd 'chef_repo2' }
           it 'knife list --local -Rfp lists everything' do
             knife('list --local -Rfp').should_succeed <<EOM
 clients/
@@ -424,7 +495,7 @@ EOM
         end
 
         context 'when cwd is inside data_bags2' do
-          cwd 'data_bags2'
+          before { cwd 'data_bags2' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag/
@@ -448,7 +519,7 @@ EOM
         end
 
         context 'when cwd is at the top level' do
-          cwd '.'
+          before { cwd '.' }
           it 'knife list --local -Rfp lists everything' do
             knife('list --local -Rfp').should_succeed <<EOM
 clients/
@@ -481,7 +552,7 @@ EOM
         end
 
         context 'when cwd is inside the data_bags directory' do
-          cwd 'data_bags'
+          before { cwd 'data_bags' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag/
@@ -493,7 +564,7 @@ EOM
         end
 
         context 'when cwd is inside chef_repo2' do
-          cwd 'chef_repo2'
+          before { cwd 'chef_repo2' }
           it 'knife list --local -Rfp lists everything' do
             knife('list --local -Rfp').should_succeed <<EOM
 clients/
@@ -526,7 +597,7 @@ EOM
         end
 
         context 'when cwd is inside chef_repo2/data_bags' do
-          cwd 'chef_repo2/data_bags'
+          before { cwd 'chef_repo2/data_bags' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag/
@@ -548,21 +619,21 @@ EOM
         end
 
         context 'when cwd is at the top level' do
-          cwd '.'
+          before { cwd '.' }
           it 'knife list --local -Rfp fails' do
             knife('list --local -Rfp').should_fail("ERROR: Attempt to use relative path '' when current directory is outside the repository path\n")
           end
         end
 
         context 'when cwd is inside the data_bags directory' do
-          cwd 'data_bags'
+          before { cwd 'data_bags' }
           it 'knife list --local -Rfp fails' do
             knife('list --local -Rfp').should_fail("ERROR: Attempt to use relative path '' when current directory is outside the repository path\n")
           end
         end
 
         context 'when cwd is inside chef_repo2' do
-          cwd 'chef_repo2'
+          before { cwd 'chef_repo2' }
           it 'knife list --local -Rfp lists everything' do
             knife('list --local -Rfp').should_succeed <<EOM
 clients/
@@ -586,7 +657,7 @@ EOM
         end
 
         context 'when cwd is inside chef_repo2/data_bags' do
-          cwd 'chef_repo2/data_bags'
+          before { cwd 'chef_repo2/data_bags' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag3/
@@ -609,7 +680,7 @@ EOM
         end
 
         context 'when cwd is at the top level' do
-          cwd '.'
+          before { cwd '.' }
           it 'knife list --local -Rfp lists everything' do
             knife('list --local -Rfp').should_succeed <<EOM
 clients/
@@ -642,7 +713,7 @@ EOM
         end
 
         context 'when cwd is inside the data_bags directory' do
-          cwd 'data_bags'
+          before { cwd 'data_bags' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag/
@@ -654,7 +725,7 @@ EOM
         end
 
         context 'when cwd is inside chef_repo2' do
-          cwd 'chef_repo2'
+          before { cwd 'chef_repo2' }
           it 'knife list --local -Rfp lists everything' do
             knife('list --local -Rfp').should_succeed <<EOM
 clients/
@@ -687,7 +758,7 @@ EOM
         end
 
         context 'when cwd is inside chef_repo2/data_bags' do
-          cwd 'chef_repo2/data_bags'
+          before { cwd 'chef_repo2/data_bags' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag/
@@ -709,14 +780,14 @@ EOM
         end
 
         context 'when cwd is at the top level' do
-          cwd '.'
+          before { cwd '.' }
           it 'knife list --local -Rfp fails' do
             knife('list --local -Rfp').should_fail("ERROR: Attempt to use relative path '' when current directory is outside the repository path\n")
           end
         end
 
         context 'when cwd is inside the data_bags directory' do
-          cwd 'data_bags'
+          before { cwd 'data_bags' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag/
@@ -726,7 +797,7 @@ EOM
         end
 
         context 'when cwd is inside chef_repo2' do
-          cwd 'chef_repo2'
+          before { cwd 'chef_repo2' }
           it 'knife list --local -Rfp lists everything' do
             knife('list --local -Rfp').should_succeed <<EOM
 clients/
@@ -750,7 +821,7 @@ EOM
         end
 
         context 'when cwd is inside chef_repo2/data_bags' do
-          cwd 'chef_repo2/data_bags'
+          before { cwd 'chef_repo2/data_bags' }
           it 'knife list --local -Rfp fails' do
             knife('list --local -Rfp').should_fail("ERROR: Attempt to use relative path '' when current directory is outside the repository path\n")
           end
@@ -758,6 +829,8 @@ EOM
       end
 
       context 'when data_bag_path is set and nothing else' do
+        include_context "default config options"
+
         before :each do
           %w(client cookbook  environment node role user).each do |object_name|
             Chef::Config.delete("#{object_name}_path".to_sym)
@@ -782,7 +855,7 @@ EOM
         end
 
         context 'when cwd is inside the data_bags directory' do
-          cwd 'data_bags'
+          before { cwd 'data_bags' }
           it 'knife list --local -Rfp lists data bags' do
             knife('list --local -Rfp').should_succeed <<EOM
 bag/
